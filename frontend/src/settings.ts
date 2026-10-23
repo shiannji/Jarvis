@@ -117,13 +117,13 @@ function buildPanelHTML(): string {
           <div class="settings-field">
             <label>${L("Voice", "語音引擎")}</label>
             <select id="input-voice">
-              <option value="auto">${L("Automatic — Fish Audio if there is a key, otherwise the browser's voice",
-                                        "自動——有 Fish Audio 金鑰就用電影版聲音，沒有就用瀏覽器語音")}</option>
-              <option value="fish">${L("Fish Audio only (the JARVIS voice, paid key)",
-                                       "只用 Fish Audio（電影版 JARVIS 聲音，需付費金鑰）")}</option>
-              <option value="browser">${L("Browser's built-in voice only (free)",
-                                          "只用瀏覽器內建語音（免費）")}</option>
+              <option value="auto">${L("Automatic (recommended)", "自動（建議）")}</option>
+              <option value="fish">${L("Fish Audio only — the JARVIS voice", "只用 Fish Audio（電影版聲音）")}</option>
+              <option value="browser">${L("Browser voice only — free", "只用瀏覽器語音（免費）")}</option>
             </select>
+            <p class="settings-restart-notice">${L(
+              "Automatic: the JARVIS voice from the films when there is a Fish Audio key, the browser's own voice when there is not.",
+              "自動：有 Fish Audio 金鑰就用電影版 JARVIS 聲音，沒有就用瀏覽器內建語音。")}</p>
           </div>
 
           <div class="settings-field">
@@ -378,7 +378,7 @@ function wireEvents() {
 
   // Hear the browser's voice without waiting for JARVIS to say something.
   document.getElementById("btn-test-voice")?.addEventListener("click", () => {
-    sampleVoice?.(L("Good evening, sir. All systems are online.", "晚上好，先生。所有系統都已上線。"));
+    sampleVoice?.(L("All systems are online, sir.", "先生，所有系統都已上線。"));
   });
 
   // Setup next button

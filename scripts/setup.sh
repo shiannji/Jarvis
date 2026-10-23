@@ -164,8 +164,8 @@ if [[ ! -f .env ]]; then
   echo "    1) 繁體中文（台灣）"
   echo "    2) English（原版英國管家）"
   case "$(ask '請選擇 [1]：' 1)" in
-    2) set_env JARVIS_LANGUAGE en ;;
-    *) set_env JARVIS_LANGUAGE zh-TW ;;
+    2) set_env JARVIS_LANGUAGE en && ok "對話語言：English" ;;
+    *) set_env JARVIS_LANGUAGE zh-TW && ok "對話語言：繁體中文" ;;
   esac
 
   NAME="$(ask '你的名字（JARVIS 會記得，可直接按 Enter 略過）：' '')"

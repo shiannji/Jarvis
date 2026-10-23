@@ -31,13 +31,21 @@ LOG_FRONT="data/vite.log"
 
 BACK_PID=""
 FRONT_PID=""
+TAIL_PID=""
 cleanup() {
   trap - INT TERM EXIT
   echo
   say "正在關閉 JARVIS…"
-  [[ -n "$FRONT_PID" ]] && kill "$FRONT_PID" 2>/dev/null || true
-  [[ -n "$BACK_PID" ]] && kill "$BACK_PID" 2>/dev/null || true
-  wait 2>/dev/null || true
+  local pid
+  for pid in "$FRONT_PID" "$BACK_PID" "$TAIL_PID"; do
+    [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; }
+  done
+  # Wait for exactly these: a bare `wait` would also wait on anything else
+  # this shell ever started.
+  for pid in "$FRONT_PID" "$BACK_PID" "$TAIL_PID"; do
+    [[ -n "$pid" ]] && { wait "$pid" 2>/dev/null || true; }
+  done
+  return 0
 }
 trap cleanup INT TERM EXIT
 
@@ -46,7 +54,9 @@ say "啟動後端（server.py）… 紀錄：$LOG_BACK"
 BACK_PID=$!
 
 say "啟動前端（Vite）… 紀錄：$LOG_FRONT"
-(cd frontend && exec npx vite --port 5173 --strictPort) >"$LOG_FRONT" 2>&1 &
+# Vite's own binary, not `npx vite`: npx wraps it in two more processes and
+# does not pass a kill on, which would leave Vite holding 5173 after we exit.
+(cd frontend && exec ./node_modules/.bin/vite --port 5173 --strictPort) >"$LOG_FRONT" 2>&1 &
 FRONT_PID=$!
 
 wait_for() {  # wait_for 網址 秒數
