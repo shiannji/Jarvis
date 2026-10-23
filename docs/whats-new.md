@@ -87,8 +87,24 @@ codebase that started without them. Here it is load-bearing from the floor up:
 
 ## And it is tested
 
-Public: 6 test files, 43 tests. Here: 83 files, **2,405 tests**, named for the
+Public: 6 test files, 43 tests. Here: 91 files, **2,587 tests**, named for the
 behaviour they protect rather than the function they call.
+
+## He speaks Mandarin, and he is never silent
+
+This copy is a fork with three additions on top of everything above:
+
+- **Mandarin.** With `JARVIS_LANGUAGE=zh-TW` the microphone listens in
+  Taiwanese Mandarin, he answers in Traditional Chinese, and the lines he
+  speaks in his own words — greetings, read-backs, "cancelled", "the work in
+  X is done" — are Mandarin too. 再說一次 replays, 等一下 cancels, 重新開始
+  starts fresh. English is one setting away.
+- **A voice without a key.** Fish Audio is optional now: without a key, or
+  for any sentence it fails on, the browser speaks with its own built-in
+  voice — free, and acknowledged exactly like audio, so interrupting him
+  works the same either way.
+- **One-command setup.** `scripts/setup.sh` installs everything and asks
+  three questions; `scripts/start.sh` starts both halves and opens Chrome.
 
 ---
 

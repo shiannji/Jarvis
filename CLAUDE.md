@@ -9,13 +9,19 @@ facts (mic-in-Chrome-only, the per-port permission trap, subscription vs. API
 key, what an expired login sounds like, Accessibility) that were only learned
 by hitting them live, and this walkthrough assumes them.
 
+This fork adds Mandarin (`JARVIS_LANGUAGE=zh-TW`, the default in
+`.env.example`), a free browser voice (`JARVIS_TTS`), and two scripts that do
+everything below on a Mac: `./scripts/setup.sh` then `./scripts/start.sh`
+(`README.zh-TW.md` is the user-facing guide, in Traditional Chinese). Point a
+user at those first; the manual steps are for when a script fails.
+
 When a user clones this repo and starts Claude Code, help them:
 1. Copy .env.example to .env
 2. Install Claude Code (`npm install -g @anthropic-ai/claude-code`, 2.1.224 or
    newer) and log in with `claude` — JARVIS's brain runs on your Claude
    subscription, not on an API key
-3. Get a Fish Audio API key from fish.audio (required — there is no fallback
-   voice)
+3. Optionally get a Fish Audio API key from fish.audio, for the film voice.
+   Without one the page speaks with Chrome's built-in voice
 4. Install Python dependencies: pip install -r requirements.txt
 5. Install the Playwright browser: python -m playwright install chromium
    (`read_page` / `look_at_page` need it)
@@ -88,7 +94,16 @@ arbitrary LLM and file content, so everything goes through
   forwards `tools/call` to `POST /internal/tool`
 - `speech.py` — Sentence splitting and the scheduler that owns every
   utterance JARVIS speaks
-- `tts.py` — Fish Audio synthesis, one request per sentence chunk
+- `tts.py` — Fish Audio synthesis, one request per sentence chunk, and which
+  voice speaks a sentence (`JARVIS_TTS`: Fish Audio, or the page's own)
+- `i18n.py` — Which language he hears and speaks (`JARVIS_LANGUAGE`): the
+  recogniser's language, the brain's fixed language directive, and `pick(en,
+  zh)` for the lines the server speaks in its own words
+- `frontend/src/speaker.ts` — The browser's own voice (`speechSynthesis`) for
+  `speak` frames, acked when a sentence finishes exactly like audio
+- `frontend/src/i18n.ts` — The voice page's own words in the active language
+- `scripts/setup.sh`, `scripts/start.sh`, `scripts/doctor.py` — One-command
+  install, start (server + Vite + Chrome), and the preflight report
 - `frontend/src/orb.ts` — Three.js particle orb visualization
 - `frontend/src/voice.ts` — Web Speech API + audio playback
 - `frontend/src/main.ts` — Frontend state machine
@@ -160,7 +175,18 @@ JARVIS builds**. It is only this repository's own copies that are gone.
   never spawns it (every test sets this)
 - `JARVIS_MUTE_MIC_DURING_SPEECH` (optional, default false) — fallback if echo
   rejection is not enough with a given microphone
-- `FISH_API_KEY` (required) — Fish Audio TTS
+- `FISH_API_KEY` (optional) — Fish Audio TTS, the voice from the films.
+  Without it the page speaks with the browser's voice unless `JARVIS_TTS=fish`.
+  The old example's placeholder (`your-fish-audio-api-key-here`) counts as unset
+- `JARVIS_LANGUAGE` (optional, default `en`; this fork's `.env.example` ships
+  `zh-TW`) — `zh-TW` makes the recogniser listen in Taiwanese Mandarin, the
+  brain answer in Traditional Chinese, and the server speak its own lines in
+  Mandarin. Tool results and the persona stay English
+- `JARVIS_TTS` (optional, default `auto`) — `auto`: Fish Audio with a key,
+  the browser's voice without one and for any sentence Fish fails on; `fish`:
+  Fish or nothing (the original behaviour); `browser`: never call Fish
+- `JARVIS_BROWSER_VOICE` (optional) — part of the name of the browser voice
+  to use (`Meijia`, `Daniel`); empty picks a Taiwan Mandarin or British one
 - `FISH_VOICE_ID` (optional) — Voice model ID
 - `USER_NAME` (optional) — Your name for JARVIS to use
 - `JARVIS_DATA_DIR` (optional) — Where JARVIS writes everything: the SQLite
@@ -204,7 +230,15 @@ Everything else uses fakes at the subprocess seam — `screencapture`, `sips`,
 needs the network, a real window, or a real `claude`, mark it.
 
 ## Conventions
-- JARVIS personality: British butler, dry wit, economy of language
+- JARVIS personality: British butler, dry wit, economy of language — in
+  Mandarin too, where "sir" is 先生
+- A line the server speaks itself is written as `i18n.pick(english,
+  mandarin)` at the call site, the English unchanged: it is what the tests pin.
+  `tests/conftest.py` pins every test to `JARVIS_LANGUAGE=en` and
+  `JARVIS_TTS=fish`; a test of Mandarin or the browser voice sets them itself
+- The voice page is tested end to end by `tests/test_voice_page.py`: the
+  built bundle in headless Chromium against the real server, with scripted
+  stand-ins only for the microphone and `speechSynthesis`
 - Max 1-2 sentences per voice response
 - The brain reaches JARVIS's capabilities as MCP tools (`jarvis_mcp.py` ->
   `/internal/tool`), not by parsing `[ACTION:X]` tags out of its reply — that

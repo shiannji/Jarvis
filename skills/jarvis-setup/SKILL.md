@@ -1,6 +1,6 @@
 ---
 name: jarvis-setup
-description: Use when helping someone install, configure, or debug a fresh clone of JARVIS (this repo) — especially "the mic doesn't work", "JARVIS says his language systems are down", any Firefox/browser question, login/auth failures, or Accessibility permission prompts. Carries facts about this project that were only learned by hitting them live; check it before guessing.
+description: Use when helping someone install, configure, or debug a fresh clone of JARVIS (this repo) — especially "the mic doesn't work", "JARVIS says his language systems are down", "he is silent", Mandarin / zh-TW questions, any Firefox/browser question, login/auth failures, or Accessibility permission prompts. Carries facts about this project that were only learned by hitting them live; check it before guessing.
 ---
 
 # Setting up JARVIS
@@ -92,14 +92,46 @@ does not follow the app there. Move it to `/Applications` and relaunch.
 error `-1728` / "not allowed assistive access") without ever triggering the
 permission prompt itself, and its remedy text carries this same guidance.
 
-## `FISH_API_KEY` is genuinely required — there is no fallback voice
+## `FISH_API_KEY` is optional in this fork — the browser speaks without it
 
-`tts.py` calls the Fish Audio API directly; if the key is missing or empty,
-`synthesize_chunk` simply returns `None` — no error, no local TTS, no
-built-in voice of any kind. Without a real key from
-[fish.audio](https://fish.audio/), JARVIS has no voice at all, which reads
-to a new user as "it's just broken." This is the one piece of setup that
-cannot be skipped or worked around.
+Upstream, a missing key meant silence. Here `JARVIS_TTS` (tts.py) decides:
+`auto` (the default) speaks with Chrome's built-in `speechSynthesis` when
+there is no key, and for any sentence a Fish request fails on; `browser`
+never calls Fish; `fish` is the original "Fish Audio or nothing". The server
+sends a `speak` frame instead of `audio`, and `frontend/src/speaker.ts` says
+it and acks it when it finishes, so echo rejection and barge-in behave the
+same. So "it's silent" is no longer "you have no key" — check, in order:
+
+- **No click yet.** Chrome refuses speech until the page has had one;
+  `speaker.ts` waits for it and the page says 「請點一下畫面以啟用聲音」 /
+  "Click anywhere to enable audio".
+- **The voice it picked.** The console logs `[voice] speaking with …`.
+  `JARVIS_BROWSER_VOICE` (a fragment of a voice's name) overrides the choice;
+  the settings panel's 試聽 / Test button plays a sample.
+- **`JARVIS_TTS=fish` with no key** — the one configuration that is still
+  silent by design; preflight reports it as a failure.
+
+The `.env.example` placeholder `your-fish-audio-api-key-here` counts as no
+key (`tts.usable_key`), so copying the example unedited does not make every
+sentence wait out a 401.
+
+## Mandarin (`JARVIS_LANGUAGE=zh-TW`)
+
+This fork's `.env.example` ships it, so assume a new user is in Mandarin.
+
+- The recogniser's language comes from the `/ws/voice` config frame, not a
+  constant: a page still listening in English means the frame never arrived
+  (the socket did not connect), not a setting that was ignored.
+- The brain answers in Traditional Chinese because `i18n.brain_directive`
+  appends a fixed paragraph to its launch prompt — a restart is needed after
+  changing the language, since the prompt is built when the brain spawns.
+- Spoken commands the server handles itself have Mandarin forms: 再說一次 /
+  蛤 (replay, no brain turn), 等一下 / 取消 (cancel), 重新開始 (fresh start,
+  matched as the WHOLE utterance — "幫我重新開始那個 run" is a request for
+  the brain).
+- macOS's Mandarin voices improve a lot with the downloadable enhanced ones:
+  System Settings → Accessibility → Spoken Content → System Voice → Manage
+  Voices → Chinese (Taiwan). Chrome lists them after a page reload.
 
 ## Connecting a service: one file, and it is not the one you'd guess
 

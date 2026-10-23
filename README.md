@@ -2,6 +2,17 @@
 
 **Just A Rather Very Intelligent System — a voice for Claude Code.**
 
+> **中文使用者請看 [README.zh-TW.md](README.zh-TW.md)**：完整的繁體中文安裝與使用說明。
+>
+> This fork of [ethanplusai/jarvis](https://github.com/ethanplusai/jarvis)
+> adds three things: JARVIS can hear and answer in **Mandarin**
+> (`JARVIS_LANGUAGE=zh-TW`, Traditional Chinese as written in Taiwan); he is
+> **never silent** — without a Fish Audio key, or for any sentence Fish could
+> not voice, the page speaks with Chrome's own free voice (`JARVIS_TTS`); and
+> **one-command setup and start** (`scripts/setup.sh`, `scripts/start.sh`).
+> English with Fish Audio behaves exactly as upstream; set
+> `JARVIS_LANGUAGE=en` for the original British butler.
+
 JARVIS is a British butler who sits on top of the Claude Code you already pay
 for. You talk to him. He brainstorms a project with you out loud, one question
 at a time; when you have settled on something he writes the design down as a
@@ -76,11 +87,14 @@ limit.](docs/images/dashboard-usage.png)
 *So the number that matters is not a dollar figure — it is how much of your
 subscription's two windows is gone. Fictional sample data.*
 
-**The one thing you pay for is [Fish Audio](https://fish.audio/)**, which
-gives JARVIS his voice. Be aware there is no fallback: `tts.py` returns
-nothing without `FISH_API_KEY`, so JARVIS goes silent and his replies appear
-as text in the browser instead. If you would rather use a different TTS, that
-is a small, well-isolated file to replace — see *Make it yours* below.
+**The one thing you might pay for is [Fish Audio](https://fish.audio/)**,
+which gives JARVIS the voice from the films. It is optional in this fork:
+without `FISH_API_KEY` the page speaks with Chrome's built-in
+`speechSynthesis` instead — free, and it has Mandarin — and in the default
+`JARVIS_TTS=auto` it also covers any sentence a Fish request fails on. Set
+`JARVIS_TTS=fish` for the original "Fish Audio or nothing", where an unvoiced
+reply appears as text. If you would rather use a different TTS, that is a
+small, well-isolated file to replace — see *Make it yours* below.
 
 ## What he does
 
@@ -148,9 +162,16 @@ stuck is the CLI's own words, not a guess. Fictional sample data.*
   @anthropic-ai/claude-code` (2.1.224 or newer), then run `claude` once and
   log in. This is what JARVIS runs on.
 - **Python 3.11+** and **Node.js 18+**.
-- **A Fish Audio API key.** Required; there is no fallback voice.
+- **A Fish Audio API key** — optional. Without one JARVIS speaks with the
+  browser's built-in voice (see `JARVIS_TTS` in `.env.example`).
 
 ## Setup
+
+On a Mac, the short way is two scripts: `./scripts/setup.sh` checks the
+tools, installs everything, makes the certificates and writes `.env`;
+`./scripts/start.sh` starts the server and Vite together and opens Chrome
+(Ctrl+C stops both). `.venv/bin/python scripts/doctor.py` re-runs the
+server's own first-run checks at any time. The long way:
 
 ```bash
 git clone <your fork of this repo> jarvis
@@ -165,10 +186,11 @@ cd frontend && npm install && cd ..
 ```
 
 **Fill in the `.env`.** `.env.example` documents the lot; the short version is
-one required key and three optional ones:
+that nothing is required any more, and these are the ones worth knowing:
 
 ```env
-FISH_API_KEY=...            # required, no fallback
+FISH_API_KEY=...            # optional: the film voice; empty = browser voice
+# JARVIS_LANGUAGE=zh-TW     # optional: Mandarin (default here) or en
 # JARVIS_BRAIN_MODEL=sonnet # optional: the brain's model
 # FISH_VOICE_ID=...         # optional: a different voice
 # USER_NAME=Tony            # optional: what he calls you
@@ -330,7 +352,8 @@ invariants hold throughout it:
 | `claude_env.py` | The environment every spawned child gets, including the `ANTHROPIC_*` scrub |
 | `jarvis_mcp.py` | Stdio MCP server exposing JARVIS's tools to the brain |
 | `speech.py` | Sentence splitting, echo rejection, barge-in, and the queue of everything JARVIS says |
-| `tts.py` | Fish Audio synthesis — the whole voice, in one small file |
+| `tts.py` | Fish Audio synthesis, and which voice speaks (`JARVIS_TTS`) |
+| `i18n.py` | Which language he hears and speaks (`JARVIS_LANGUAGE`), and the Mandarin helpers |
 | `builds.py` | Spec, brief and plan: the pipeline behind a real multi-hour build |
 | `specs.py` | The review surface — reading a design back by numbered section, and approving it |
 | `run_store.py` | SQLite `runs` / `run_events`, and the six-value status enum |
@@ -344,6 +367,7 @@ invariants hold throughout it:
 | `preflight.py` | First-run checks: CLI version, login, Accessibility, Fish key |
 | `data_paths.py` | The single source of truth for where JARVIS writes |
 | `frontend/src/voice.ts` | Web Speech API, audio playback |
+| `frontend/src/speaker.ts` | The browser's own voice (`speechSynthesis`), acked like audio |
 | `frontend/src/orb.ts` | The Three.js particle orb |
 | `frontend/src/dashboard/` | The dashboard (vanilla TS, no framework) |
 
@@ -437,7 +461,7 @@ client. Please open an issue before a large PR.
 pytest
 ```
 
-That runs the whole suite — around 1,640 tests — and touches neither the
+That runs the whole suite — around 2,600 tests — and touches neither the
 network nor your screen. Nine browser tests are deselected by default because
 they visit real URLs and `browser.py` launches Chromium with `headless=False`
 on purpose, so they open windows on your desk. Run those deliberately:
