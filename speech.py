@@ -13,15 +13,55 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Awaitable, Callable, Optional
 
+import i18n
+
 log = logging.getLogger("jarvis.speech")
 
 _ABBREVIATIONS = {
     "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "inc", "ltd",
     "co", "no", "approx", "fig", "dept", "e.g", "i.e", "a.m", "p.m", "u.s", "u.k",
 }
-_CLOSERS = '"\')]'
-_CLAUSE_BREAKS = (", ", "; ", " — ", " – ", ": ")
-_STRONG_BREAKS = (" — ", " – ", "; ", ": ")   # a pause a listener already expects
+_CLOSERS = '"\')]」』）】》〉”’'
+# Chinese runs its clauses together with no space after the mark, so the
+# full-width marks are breaks in their own right.
+_CLAUSE_BREAKS = (", ", "; ", " — ", " – ", ": ", "，", "、", "；", "：", "——")
+_STRONG_BREAKS = (" — ", " – ", "; ", ": ", "；", "：", "——")   # a pause a listener already expects
+_ENDERS = ".!?。！？"
+_CJK_ENDERS = "。！？"
+
+# Han, plus kana for the odd Japanese word. One character is one token (see
+# `_tokens`) and, for pacing, worth about three Latin letters (see
+# `_spoken_len`).
+_CJK_CHARS = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+_CJK_RE = re.compile(f"[{_CJK_CHARS}]")
+
+
+def _is_cjk(ch: str) -> bool:
+    return bool(_CJK_RE.match(ch))
+
+
+# How long text takes to SAY, in Latin-letter units. The first-chunk bounds
+# below were tuned in English, where forty characters is two or three
+# seconds of speech; forty Chinese characters is closer to nine. Weighting a
+# Han character as three letters keeps "get the first audio out early"
+# meaning the same thing in both languages, and leaves English exactly as
+# it was.
+_CJK_WEIGHT = 3
+
+
+def _spoken_len(text: str) -> int:
+    return sum(_CJK_WEIGHT if _is_cjk(c) else 1 for c in text)
+
+
+def _index_at(text: str, weight: int) -> int:
+    """The first index at which `text[:index]` takes `weight` to say, or
+    `len(text)` if all of it takes less."""
+    total = 0
+    for i, c in enumerate(text):
+        if total >= weight:
+            return i
+        total += _CJK_WEIGHT if _is_cjk(c) else 1
+    return len(text)
 
 
 def _word_before(text: str, i: int) -> str:
@@ -51,8 +91,8 @@ class SentenceSplitter:
             # semicolon, colon) appears past `first_chunk_min`, cut there — it is
             # a pause the listener expects anyway. Past `first_chunk_max` with no
             # sentence end, fall back to the last break of any kind.
-            cut = self._first_strong_break(self._buf, self._first_chunk_min)
-            if cut is None and len(self._buf) >= self._first_chunk_max:
+            cut = self._first_strong_break(self._buf, _index_at(self._buf, self._first_chunk_min))
+            if cut is None and _spoken_len(self._buf) >= self._first_chunk_max:
                 cut = self._last_clause_break(self._buf)
             if cut:
                 out.append(self._take(cut))
@@ -87,16 +127,18 @@ class SentenceSplitter:
     def _boundary(self, text: str) -> Optional[int]:
         i, n = 0, len(text)
         while i < n:
-            if text[i] in ".!?":
+            if text[i] in _ENDERS:
                 j = i
-                while j < n and text[j] in ".!?":
+                while j < n and text[j] in _ENDERS:
                     j += 1
                 k = j
                 while k < n and text[k] in _CLOSERS:
                     k += 1
                 if k >= n:
                     return None                      # need to see what follows
-                if not text[k].isspace():
+                if any(c in _CJK_ENDERS for c in text[i:j]):
+                    return k                         # "好的。我來" — no space follows in Chinese
+                if not text[k].isspace() and not _is_cjk(text[k]):
                     i = k                            # "3.5", "server.py"
                     continue
                 if text[i] == "." and j - i == 1:
@@ -133,6 +175,17 @@ class Priority(IntEnum):
 BRIDGES = ("As I was saying —", "Back to it —", "Where was I —")
 CANCEL_WORDS = ("wait", "no", "stop", "cancel", "hold on")
 UNREAD_PREFIX = "Before I forget —"
+VOICE_FAILING_LINE = "My voice is failing, sir."
+# The same three things in Mandarin. The cancel words are heard in BOTH
+# languages whatever JARVIS is speaking — Chrome's zh-TW recogniser hands an
+# English "stop" back as "stop" — so they join the English ones rather than
+# replacing them. Bare 不 ("no") is left out on purpose: it is also how 不過
+# ("but") begins, and an interim of one character would cut him off.
+ZH_BRIDGES = ("剛才說到——", "回到正題——", "我說到哪了——")
+ZH_CANCEL_WORDS = ("等等", "等一下", "停", "停止", "停下來", "先停", "暫停",
+                   "取消", "不要", "不對", "算了", "別說了", "安靜")
+ZH_UNREAD_PREFIX = "差點忘了——"
+ZH_VOICE_FAILING_LINE = "先生，我的聲音出了點問題。"
 # The last resort, and only that. An unacked chunk's tokens count as echo
 # because the chunk may still be coming out of the speaker — and nothing plays
 # for two minutes, so this number is not a claim about audio. It is the bound
@@ -226,7 +279,12 @@ SHORT_UTTERANCE_TOKENS = 2
 Synthesize = Callable[[str], Awaitable[Optional[bytes]]]
 Emit = Callable[[dict], Awaitable[None]]
 
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
+# A Latin word is a token; so is each Han character. Chinese has no spaces to
+# split on, and a character is the unit the recogniser gets right or wrong —
+# a homophone slip swaps one character, never a "word" — so whole characters
+# keep the echo arithmetic below honest in both languages. English tokenizes
+# exactly as it always did.
+_TOKEN_RE = re.compile(f"[a-z0-9']+|[{_CJK_CHARS}]")
 
 
 def _tokens(text: str) -> list[str]:
@@ -261,14 +319,33 @@ _REPLAY_TRIGGERS = frozenset({
     ("pardon", "me"),
 })
 
+# Mandarin, by the same narrow rule: the whole utterance, padding trimmed
+# off the ends one character at a time — 請 and 麻煩 in front, 嗎 and 吧
+# behind, 賈維斯 either side — never anything from the middle. 什麼 and 蛤
+# on their own are how "pardon?" is said; 你說什麼意思 ("what do you mean")
+# is a real question and is not here.
+_ZH_REPLAY_FILLER = frozenset("請麻煩可以嗎吧啊呀喔哦嗯呃欸賈加嘉佳維斯")
+_ZH_REPLAY_PHRASES = (
+    "再說一次", "再說一遍", "再講一次", "再講一遍", "重說一次", "重講一次",
+    "你再說一次", "你再講一次", "你再說一遍", "再一次", "重複", "重複一次",
+    "重複一遍", "你說什麼", "你剛剛說什麼", "你剛才說什麼", "剛剛說什麼",
+    "剛才說什麼", "你說啥", "什麼", "啥", "蛤",
+)
+
+
+# Both languages, always: the triggers cannot collide (Latin words against
+# Han characters) and a bilingual user says "repeat" in either.
+_ANY_REPLAY_FILLER = _REPLAY_FILLER | _ZH_REPLAY_FILLER
+_ANY_REPLAY_TRIGGER = _REPLAY_TRIGGERS | {tuple(_tokens(p)) for p in _ZH_REPLAY_PHRASES}
+
 
 def _is_replay_request(toks: list[str]) -> bool:
     i, j = 0, len(toks)
-    while i < j and toks[i] in _REPLAY_FILLER:
+    while i < j and toks[i] in _ANY_REPLAY_FILLER:
         i += 1
-    while j > i and toks[j - 1] in _REPLAY_FILLER:
+    while j > i and toks[j - 1] in _ANY_REPLAY_FILLER:
         j -= 1
-    return tuple(toks[i:j]) in _REPLAY_TRIGGERS
+    return tuple(toks[i:j]) in _ANY_REPLAY_TRIGGER
 
 
 @dataclass
@@ -281,6 +358,7 @@ class Chunk:
     ready: bool = False
     notice: bool = False        # this chunk's failure was the third in a row: warn after it
     earliest_ack: float = 0.0   # no honest ack can arrive before this (see ACK_FLOOR_FACTOR)
+    browser: Optional[str] = None   # no audio of ours: the page speaks this text itself
 
 
 @dataclass
@@ -359,11 +437,16 @@ class SpeechScheduler:
                  stale_after: float = 60.0, echo_window: float = 6.0,
                  batch_settle: float = 2.0, ack_timeout: float = 45.0,
                  transport_ready: Optional[Callable[[], bool]] = None,
-                 bridges: tuple = BRIDGES, cancel_words: tuple = CANCEL_WORDS,
+                 bridges: tuple = BRIDGES,
+                 cancel_words: tuple = CANCEL_WORDS + ZH_CANCEL_WORDS,
+                 browser_voice: Optional[Callable[[], bool]] = None,
                  clock: Callable[[], float] = time.monotonic):
         """`clock` drives scheduling decisions only; `wait_for` and
         `open_cancel_window` sleep in real time. `transport_ready` says whether
-        anyone can hear us — proactive (unread/batched) speech waits for it."""
+        anyone can hear us — proactive (unread/batched) speech waits for it.
+        `browser_voice` says whether a chunk with no audio of its own — no
+        Fish Audio key, or a request that failed — is handed to the page to
+        speak with its built-in voice instead of being shown as text."""
         self._clock = clock
         self.ack_timeout = ack_timeout             # a chunk unacked this long = the client is gone
         self._transport_ready = transport_ready or (lambda: True)
@@ -381,7 +464,10 @@ class SpeechScheduler:
         self.stale_after = stale_after
         self.echo_window = echo_window
         self.bridges = bridges
-        self.cancel_words = tuple(cancel_words)
+        # Compared against tokenized speech, so stored tokenized: "hold on"
+        # is unchanged, and 等一下 becomes the three characters it is heard as.
+        self.cancel_words = tuple(" ".join(_tokens(w)) for w in cancel_words)
+        self._browser_voice = browser_voice or (lambda: False)
         self._next_id = 1
         self._current: Optional[Utterance] = None
         self._paused: Optional[Utterance] = None
@@ -891,15 +977,23 @@ class SpeechScheduler:
 
     async def _synthesize(self, utt: Utterance, chunk: Chunk) -> None:
         audio: Optional[bytes] = None
+        spoken = chunk.text
         try:
-            audio = await self._synth(self._prepare(chunk.text))
+            spoken = self._prepare(chunk.text)
+            audio = await self._synth(spoken)
         except Exception as e:
             log.error(f"synth failed: {e}")
         if utt.cancelled:
             return
         chunk.audio = audio
+        if audio is None and spoken.strip() and self._browser_voice():
+            # Nothing of ours to play, but the page has a voice of its own
+            # (Chrome's speechSynthesis — free, and it speaks Mandarin). The
+            # text it gets is the PREPARED text, markdown already stripped:
+            # it is read aloud, not shown.
+            chunk.browser = spoken
         chunk.ready = True
-        if audio is None:
+        if audio is None and chunk.browser is None:
             self._tts_failures += 1
             if self._tts_failures == 3:
                 chunk.notice = True              # the send loop warns right after this chunk
@@ -995,7 +1089,7 @@ class SpeechScheduler:
         if not self._user_silent(now) or not self._transport_ready():
             return
         if self._unread:
-            text = f"{UNREAD_PREFIX} " + " ".join(self._unread)
+            text = f"{i18n.pick(UNREAD_PREFIX, ZH_UNREAD_PREFIX)} " + " ".join(self._unread)
             self._unread.clear()
             u = self._new(Priority.URGENT, "say", immediate=True)
             self._fill(u, text)
@@ -1115,7 +1209,8 @@ class SpeechScheduler:
         """Resume after a preemption: a bridge phrase goes in front of the first
         unplayed chunk. Chunks own their audio, so shifting positions is safe even
         while synthesis for later chunks is still running."""
-        bridge = Chunk(self.bridges[u.resumes % len(self.bridges)])
+        bridges = ZH_BRIDGES if self.bridges is BRIDGES and i18n.is_zh() else self.bridges
+        bridge = Chunk(bridges[u.resumes % len(bridges)])
         u.resumes += 1
         log.info("speech: resuming utterance %s (resume %d of %d) from chunk %d",
                  u.id, u.resumes, MAX_RESUMES, u.played + 1)
@@ -1140,7 +1235,7 @@ class SpeechScheduler:
             chunk = u.chunks[idx]
             if not chunk.ready:
                 break
-            if chunk.audio is None:
+            if chunk.audio is None and chunk.browser is None:
                 # Nothing to play, so nothing to ack — but it still takes its
                 # TURN. Without a link here the next chunk's chain restarted
                 # at `now`, and a single failed synthesis let `wait_for` say
@@ -1157,7 +1252,8 @@ class SpeechScheduler:
                 if not await self._send({"type": "text", "text": chunk.text}, u):
                     return False
                 if chunk.notice:
-                    await self._send({"type": "text", "text": "My voice is failing, sir."}, u)
+                    await self._send({"type": "text",
+                                      "text": i18n.pick(VOICE_FAILING_LINE, ZH_VOICE_FAILING_LINE)}, u)
                 progressed = True
                 continue
             await self._set_speaking(True)
@@ -1174,10 +1270,19 @@ class SpeechScheduler:
                 if u.first_sent_at is None:
                     u.first_sent_at = now
                 u.last_progress_at = now
+                if chunk.browser is not None:
+                    # Spoken by the page and acked exactly like audio — when
+                    # the utterance ENDS (`onend`) — so echo rejection,
+                    # barge-in and every read-back's `wait_for` work the same
+                    # in both voices. No mp3 means no floor (see
+                    # ACK_FLOOR_FACTOR): the ack is the only clock there is.
+                    frame = {"type": "speak", "utt": u.id, "idx": idx, "text": chunk.browser}
+                else:
+                    frame = {"type": "audio", "utt": u.id, "idx": idx,
+                             "data": base64.b64encode(chunk.audio).decode(),
+                             "text": chunk.text}
                 try:
-                    await self._emit_raw({"type": "audio", "utt": u.id, "idx": idx,
-                                          "data": base64.b64encode(chunk.audio).decode(),
-                                          "text": chunk.text})
+                    await self._emit_raw(frame)
                     u.high_sent = max(u.high_sent, idx)   # it really did go out
                 except Exception as e:
                     # The transport is broken: nothing we send will play. Drop

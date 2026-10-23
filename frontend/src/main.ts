@@ -7,8 +7,10 @@
 
 import { createOrb, type OrbState } from "./orb";
 import { createVoiceInput, createAudioPlayer, createMicMonitor } from "./voice";
+import { createBrowserSpeaker } from "./speaker";
 import { createSocket } from "./ws";
-import { openSettings, checkFirstTimeSetup } from "./settings";
+import { openSettings, checkFirstTimeSetup, setSampleVoice } from "./settings";
+import { t, setLang, lang } from "./i18n";
 import "./style.css";
 
 // ---------------------------------------------------------------------------
@@ -33,12 +35,34 @@ function showError(msg: string) {
 function updateStatus(state: State) {
   const labels: Record<State, string> = {
     idle: "",
-    listening: "listening...",
-    thinking: "thinking...",
+    listening: t("listening"),
+    thinking: t("thinking"),
     speaking: "",
     compacting: "",          // the notice banner carries the words; the orb carries the state
   };
   statusEl.textContent = labels[state];
+}
+
+// The page's fixed words, in the language the server says JARVIS speaks.
+function applyLanguage() {
+  document.documentElement.lang = lang();
+  const label = (id: string, text: string) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  const title = (id: string, text: string) => {
+    const el = document.getElementById(id);
+    if (el) el.title = text;
+  };
+  label("btn-settings", t("settings"));
+  label("btn-restart", t("restart"));
+  label("btn-fix-self", t("fixSelf"));
+  title("btn-mute", t("muteTitle"));
+  title("btn-menu", t("menuTitle"));
+  title("mic-level", t("micLevel"));
+  label("hush", t("stop"));
+  title("hush", t("stopTitle"));
+  updateStatus(currentState);
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +78,13 @@ const socket = createSocket(WS_URL);
 
 const audioPlayer = createAudioPlayer();
 orb.setAnalyser(audioPlayer.getAnalyser());
+
+// The free voice: the browser's own, for every sentence the server has no
+// audio for (see tts.py). It plays outside Web Audio, so it hands the orb a
+// loudness of its own.
+const browserVoice = createBrowserSpeaker();
+orb.setLevels(() => browserVoice.levels());
+setSampleVoice((text: string) => browserVoice.sample(text));
 
 let muteMicDuringSpeech = false;
 
@@ -129,8 +160,8 @@ const micMonitor = createMicMonitor(
 const hushBtn = document.createElement("button");
 hushBtn.id = "hush";
 hushBtn.type = "button";
-hushBtn.textContent = "Stop";
-hushBtn.title = "Stop speaking (Esc)";
+hushBtn.textContent = t("stop");
+hushBtn.title = t("stopTitle");
 hushBtn.hidden = true;
 document.body.appendChild(hushBtn);
 
@@ -138,6 +169,7 @@ function hush() {
   if (currentState !== "speaking") return;
   // Locally first: the round trip is real and silence should be instant.
   audioPlayer.stop();
+  browserVoice.stop();
   socket.send({ type: "hush" });
   transition(isMuted ? "idle" : "listening");
 }
@@ -151,12 +183,21 @@ audioPlayer.onPlayed((utt, idx) => {
   socket.send({ type: "played", utt, idx });
 });
 
+// The same ack, for a sentence the browser spoke: when it has FINISHED.
+browserVoice.onPlayed((utt, idx) => {
+  socket.send({ type: "played", utt, idx });
+});
+
 // End of speech is the server's call (`status: idle` after every chunk is
 // acked); a transient empty queue mid-utterance must not flip the UI.
 audioPlayer.onFinished(() => {});
 
 audioPlayer.onNeedsGesture(() => {
-  showError("Click anywhere to enable audio");
+  showError(t("enableAudio"));
+});
+
+browserVoice.onNeedsGesture(() => {
+  showError(t("enableAudio"));
 });
 
 // ---------------------------------------------------------------------------
@@ -168,6 +209,19 @@ socket.onMessage((msg) => {
 
   if (type === "config") {
     muteMicDuringSpeech = Boolean(msg.muteMicDuringSpeech);
+    if (typeof msg.lang === "string") {
+      if (setLang(msg.lang)) applyLanguage();
+      voiceInput.setLang(lang());
+      browserVoice.setLang(lang());
+    }
+    browserVoice.setVoiceHint(typeof msg.browserVoice === "string" ? msg.browserVoice : "");
+    if (msg.voice === "browser" && !browserVoice.available) showError(t("noBrowserVoice"));
+  } else if (type === "speak") {
+    // A sentence with no audio of ours: the browser says it, and acks it
+    // when it has finished, exactly as an audio chunk is acked.
+    if (currentState !== "speaking") transition("speaking");
+    browserVoice.enqueue(String(msg.text ?? ""), Number(msg.utt), Number(msg.idx));
+    if (msg.text) console.log("[JARVIS]", msg.text);
   } else if (type === "audio") {
     const data = msg.data as string;
     if (data) {
@@ -177,9 +231,11 @@ socket.onMessage((msg) => {
     if (msg.text) console.log("[JARVIS]", msg.text);
   } else if (type === "stop") {
     audioPlayer.stop();
+    browserVoice.stop();
     transition(isMuted ? "idle" : "listening");
   } else if (type === "drop_queued") {
     audioPlayer.dropQueued();
+    browserVoice.dropQueued();
   } else if (type === "status") {
     const state = msg.state as string;
     if (state === "thinking") transition("thinking");
@@ -203,6 +259,8 @@ socket.onMessage((msg) => {
 // ---------------------------------------------------------------------------
 // Kick off
 // ---------------------------------------------------------------------------
+
+applyLanguage();
 
 // Start listening after a brief delay for the orb to render
 setTimeout(() => {
@@ -259,13 +317,13 @@ document.addEventListener("click", () => {
 btnRestart.addEventListener("click", async (e) => {
   e.stopPropagation();
   menuDropdown.style.display = "none";
-  statusEl.textContent = "restarting...";
+  statusEl.textContent = t("restarting");
   try {
     await fetch("/api/restart", { method: "POST" });
     // Wait a few seconds then reload
     setTimeout(() => window.location.reload(), 4000);
   } catch {
-    statusEl.textContent = "restart failed";
+    statusEl.textContent = t("restartFailed");
   }
 });
 
@@ -274,7 +332,7 @@ btnFixSelf.addEventListener("click", (e) => {
   menuDropdown.style.display = "none";
   // Activate work mode on the WebSocket session (JARVIS becomes Claude Code's voice)
   // Milestone 1 has no tools yet; "Fix yourself" returns as a brain tool later.
-  statusEl.textContent = "fix-yourself is not available in this build";
+  statusEl.textContent = t("fixUnavailable");
 });
 
 // Settings button

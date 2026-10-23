@@ -3,7 +3,25 @@
  *
  * Overlay panel for API keys, connection status, preferences, and system info.
  * Slides in from the right with glass-morphism styling.
+ *
+ * Every label is a constant of this file, in the language the page was told
+ * (i18n.ts) — the template below is static markup, never anything a server
+ * or a user wrote.
  */
+
+import { isZh } from "./i18n";
+
+/** English or Mandarin, side by side at the point of use. */
+function L(en: string, zh: string): string {
+  return isZh() ? zh : en;
+}
+
+let sampleVoice: ((text: string) => void) | null = null;
+
+/** The page's own voice, for the "test the voice" button. */
+export function setSampleVoice(fn: (text: string) => void) {
+  sampleVoice = fn;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -13,6 +31,9 @@ interface StatusResponse {
   claude_code_installed: boolean;
   server_port: number;
   uptime_seconds: number;
+  language?: string;
+  voice?: string;      // the voice actually in use: "fish" | "browser"
+  tts_mode?: string;   // what was asked for: "auto" | "fish" | "browser"
   env_keys_set: {
     fish_audio: boolean;
     fish_voice_id: boolean;
@@ -23,6 +44,16 @@ interface StatusResponse {
 interface PreferencesResponse {
   user_name: string;
   honorific: string;
+  language?: string;
+  voice?: string;
+  browser_voice?: string;
+}
+
+/** Only a server with no voice at all needs the first-run wizard: Fish
+ *  Audio or nothing, and no key. Every other install can already speak. */
+function needsSetup(status: StatusResponse): boolean {
+  const mode = status.tts_mode ?? "fish"; // an older server: Fish was the only voice
+  return mode === "fish" && !status.env_keys_set.fish_audio;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,25 +92,60 @@ function buildPanelHTML(): string {
     <div class="settings-backdrop" id="settings-backdrop"></div>
     <div class="settings-panel" id="settings-panel-inner">
       <div class="settings-header">
-        <h2>Settings</h2>
+        <h2>${L("Settings", "設定")}</h2>
         <button class="settings-close" id="settings-close">&times;</button>
       </div>
 
       <div class="settings-welcome" id="settings-welcome" style="display:none">
-        <p>Welcome to JARVIS. Let's get you set up.</p>
+        <p>${L("Welcome to JARVIS. Let's get you set up.", "歡迎使用 JARVIS，我們先完成設定。")}</p>
       </div>
 
       <div class="settings-body">
 
-        <!-- API Keys -->
-        <section class="settings-section" id="section-api-keys">
-          <h3>API Keys</h3>
+        <!-- Language & Voice -->
+        <section class="settings-section" id="section-voice">
+          <h3>${L("Language &amp; Voice", "語言與聲音")}</h3>
 
           <div class="settings-field">
-            <label>Fish Audio API Key</label>
+            <label>${L("Language", "對話語言")}</label>
+            <select id="input-language">
+              <option value="zh-TW">繁體中文（台灣）</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+
+          <div class="settings-field">
+            <label>${L("Voice", "語音引擎")}</label>
+            <select id="input-voice">
+              <option value="auto">${L("Automatic — Fish Audio if there is a key, otherwise the browser's voice",
+                                        "自動——有 Fish Audio 金鑰就用電影版聲音，沒有就用瀏覽器語音")}</option>
+              <option value="fish">${L("Fish Audio only (the JARVIS voice, paid key)",
+                                       "只用 Fish Audio（電影版 JARVIS 聲音，需付費金鑰）")}</option>
+              <option value="browser">${L("Browser's built-in voice only (free)",
+                                          "只用瀏覽器內建語音（免費）")}</option>
+            </select>
+          </div>
+
+          <div class="settings-field">
+            <label>${L("Browser voice name (optional)", "瀏覽器語音名稱（可留空）")}</label>
             <div class="settings-input-row">
-              <input type="password" id="input-fish-key" placeholder="Fish Audio key..." />
-              <button class="settings-btn" id="btn-test-fish">Test</button>
+              <input type="text" id="input-browser-voice" placeholder="${L("e.g. Daniel", "例如 Meijia 或 Google 國語")}" />
+              <button class="settings-btn" id="btn-test-voice">${L("Test", "試聽")}</button>
+            </div>
+          </div>
+
+          <p class="settings-restart-notice" id="voice-current"></p>
+        </section>
+
+        <!-- API Keys -->
+        <section class="settings-section" id="section-api-keys">
+          <h3>${L("API Keys", "API 金鑰")}</h3>
+
+          <div class="settings-field">
+            <label>${L("Fish Audio API Key (optional)", "Fish Audio API 金鑰（選填）")}</label>
+            <div class="settings-input-row">
+              <input type="password" id="input-fish-key" placeholder="${L("Fish Audio key...", "Fish Audio 金鑰…")}" />
+              <button class="settings-btn" id="btn-test-fish">${L("Test", "測試")}</button>
               <span class="status-dot" id="status-fish"></span>
             </div>
           </div>
@@ -88,62 +154,67 @@ function buildPanelHTML(): string {
             <label>Fish Voice ID</label>
             <div class="settings-input-row">
               <input type="text" id="input-fish-voice-id" placeholder="612b878b113047d9a770c069c8b4fdfe" />
-              <button class="settings-btn" id="btn-save-voice-id">Save</button>
+              <button class="settings-btn" id="btn-save-voice-id">${L("Save", "儲存")}</button>
             </div>
           </div>
 
           <div class="settings-actions">
-            <button class="settings-btn primary" id="btn-save-keys">Save Keys</button>
+            <button class="settings-btn primary" id="btn-save-keys">${L("Save Keys", "儲存金鑰")}</button>
           </div>
           <p class="settings-restart-notice" id="keys-restart-notice" style="display:none">
-            Saved. Restart the server (menu &rarr; Restart Server) for this to take effect.
+            ${L("Saved. Restart the server (menu &rarr; Restart Server) for this to take effect.",
+                "已儲存。請重新啟動伺服器（選單 &rarr; 重新啟動伺服器）才會生效。")}
           </p>
         </section>
 
         <!-- Connection Status -->
         <section class="settings-section" id="section-status">
-          <h3>Connection Status</h3>
+          <h3>${L("Connection Status", "連線狀態")}</h3>
           <div class="status-grid">
             <div class="status-row"><span class="status-dot" id="status-claude-cli"></span><span>Claude Code CLI</span></div>
-            <div class="status-row"><span class="status-dot" id="status-server"></span><span>Server</span><span class="status-detail" id="status-server-detail"></span></div>
+            <div class="status-row"><span class="status-dot" id="status-server"></span><span>${L("Server", "伺服器")}</span><span class="status-detail" id="status-server-detail"></span></div>
           </div>
         </section>
 
         <!-- User Preferences -->
         <section class="settings-section" id="section-preferences">
-          <h3>User Preferences</h3>
+          <h3>${L("User Preferences", "個人偏好")}</h3>
 
           <div class="settings-field">
-            <label>Your Name</label>
-            <input type="text" id="input-user-name" placeholder="Your name" />
+            <label>${L("Your Name", "你的名字")}</label>
+            <input type="text" id="input-user-name" placeholder="${L("Your name", "你的名字")}" />
           </div>
 
           <div class="settings-field">
-            <label>Honorific</label>
+            <label>${L("Honorific", "稱謂")}</label>
             <select id="input-honorific">
-              <option value="sir">Sir</option>
-              <option value="ma'am">Ma'am</option>
-              <option value="none">None</option>
+              <option value="sir">${L("Sir", "Sir（先生）")}</option>
+              <option value="ma'am">${L("Ma'am", "Ma'am（女士）")}</option>
+              <option value="none">${L("None", "不用稱謂")}</option>
             </select>
           </div>
 
           <div class="settings-actions">
-            <button class="settings-btn primary" id="btn-save-prefs">Save Preferences</button>
+            <button class="settings-btn primary" id="btn-save-prefs">${L("Save Preferences", "儲存偏好")}</button>
           </div>
+          <p class="settings-restart-notice" id="prefs-restart-notice" style="display:none">
+            ${L("Saved. Language and voice take effect after a restart (menu &rarr; Restart Server).",
+                "已儲存。語言與聲音要重新啟動伺服器後才會生效（選單 &rarr; 重新啟動伺服器）。")}
+          </p>
         </section>
 
         <!-- System Info -->
         <section class="settings-section" id="section-sysinfo">
-          <h3>System Info</h3>
+          <h3>${L("System Info", "系統資訊")}</h3>
           <div class="sysinfo-grid">
-            <div class="sysinfo-row"><span class="sysinfo-label">Server port</span><span id="sysinfo-port">--</span></div>
-            <div class="sysinfo-row"><span class="sysinfo-label">Uptime</span><span id="sysinfo-uptime">--</span></div>
+            <div class="sysinfo-row"><span class="sysinfo-label">${L("Server port", "伺服器連接埠")}</span><span id="sysinfo-port">--</span></div>
+            <div class="sysinfo-row"><span class="sysinfo-label">${L("Uptime", "已運行")}</span><span id="sysinfo-uptime">--</span></div>
           </div>
         </section>
 
         <!-- Setup Navigation (first-time only) -->
         <div class="setup-nav" id="setup-nav" style="display:none">
-          <button class="settings-btn primary" id="btn-setup-next">Next</button>
+          <button class="settings-btn primary" id="btn-setup-next">${L("Next", "下一步")}</button>
         </div>
 
       </div>
@@ -186,7 +257,19 @@ async function loadStatus() {
     setDotStatus("status-server", "green");
 
     const serverDetail = document.getElementById("status-server-detail");
-    if (serverDetail) serverDetail.textContent = `port ${status.server_port} | up ${formatUptime(status.uptime_seconds)}`;
+    if (serverDetail) serverDetail.textContent = L(
+      `port ${status.server_port} | up ${formatUptime(status.uptime_seconds)}`,
+      `連接埠 ${status.server_port}｜已運行 ${formatUptime(status.uptime_seconds)}`);
+
+    // Which voice is speaking right now — what the server booted with, which
+    // a saved but not yet restarted choice may not match.
+    const current = document.getElementById("voice-current");
+    if (current) {
+      const voice = status.voice === "browser"
+        ? L("the browser's built-in voice", "瀏覽器內建語音")
+        : "Fish Audio";
+      current.textContent = L(`Speaking now with ${voice}.`, `目前使用：${voice}。`);
+    }
 
     // API key status dots
     setDotStatus("status-fish", status.env_keys_set.fish_audio ? "green" : "red");
@@ -208,7 +291,7 @@ async function loadStatus() {
     setDotStatus("status-claude-cli", "off");
     setDotStatus("status-fish", "off");
     const serverDetail = document.getElementById("status-server-detail");
-    if (serverDetail) serverDetail.textContent = "no answer from the server";
+    if (serverDetail) serverDetail.textContent = L("no answer from the server", "伺服器沒有回應");
     for (const id of ["sysinfo-port", "sysinfo-uptime"]) {
       const node = document.getElementById(id);
       if (node) node.textContent = "—";
@@ -224,6 +307,12 @@ async function loadPreferences() {
     const honEl = document.getElementById("input-honorific") as HTMLSelectElement;
     if (nameEl) nameEl.value = prefs.user_name || "";
     if (honEl) honEl.value = prefs.honorific || "sir";
+    const langEl = document.getElementById("input-language") as HTMLSelectElement;
+    const voiceEl = document.getElementById("input-voice") as HTMLSelectElement;
+    const bvEl = document.getElementById("input-browser-voice") as HTMLInputElement;
+    if (langEl) langEl.value = prefs.language === "zh-TW" ? "zh-TW" : "en";
+    if (voiceEl) voiceEl.value = ["auto", "fish", "browser"].includes(prefs.voice || "") ? prefs.voice! : "auto";
+    if (bvEl) bvEl.value = prefs.browser_voice || "";
   } catch (e) {
     console.error("[settings] failed to load preferences:", e);
   }
@@ -269,12 +358,27 @@ function wireEvents() {
     }
   });
 
-  // Save preferences
+  // Save preferences — the name and the language/voice choices together, so
+  // saving one never blanks the other.
   document.getElementById("btn-save-prefs")?.addEventListener("click", async () => {
     const user_name = (document.getElementById("input-user-name") as HTMLInputElement).value.trim();
     const honorific = (document.getElementById("input-honorific") as HTMLSelectElement).value;
-    await apiPost("/api/settings/preferences", { user_name, honorific });
+    const language = (document.getElementById("input-language") as HTMLSelectElement).value;
+    const voice = (document.getElementById("input-voice") as HTMLSelectElement).value;
+    const browser_voice = (document.getElementById("input-browser-voice") as HTMLInputElement).value.trim();
+    const result = await apiPost<{ success: boolean; error?: string }>(
+      "/api/settings/preferences", { user_name, honorific, language, voice, browser_voice });
+    const notice = document.getElementById("prefs-restart-notice");
+    if (notice) {
+      notice.style.display = "block";
+      if (!result.success) notice.textContent = result.error || L("Could not save.", "儲存失敗。");
+    }
     await loadStatus();
+  });
+
+  // Hear the browser's voice without waiting for JARVIS to say something.
+  document.getElementById("btn-test-voice")?.addEventListener("click", () => {
+    sampleVoice?.(L("Good evening, sir. All systems are online.", "晚上好，先生。所有系統都已上線。"));
   });
 
   // Setup next button
@@ -301,6 +405,8 @@ function enterSetupMode() {
 
 function showSetupStep(step: number) {
   const sections = ["section-api-keys", "section-preferences"];
+  const voiceSection = document.getElementById("section-voice");
+  if (voiceSection) voiceSection.style.display = step === 0 ? "" : "none";
   sections.forEach((id, i) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -311,8 +417,8 @@ function showSetupStep(step: number) {
 
   const nextBtn = document.getElementById("btn-setup-next");
   if (nextBtn) {
-    if (step === 0) nextBtn.textContent = "Next: Set Your Name";
-    else if (step === 1) nextBtn.textContent = "Finish Setup";
+    if (step === 0) nextBtn.textContent = L("Next: Set Your Name", "下一步：設定名字");
+    else if (step === 1) nextBtn.textContent = L("Finish Setup", "完成設定");
     else nextBtn.style.display = "none";
   }
 }
@@ -328,7 +434,7 @@ async function advanceSetup() {
     if (nav) nav.style.display = "none";
 
     // Show all sections
-    ["section-api-keys", "section-status", "section-preferences", "section-sysinfo"].forEach((id) => {
+    ["section-voice", "section-api-keys", "section-status", "section-preferences", "section-sysinfo"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = "";
     });
@@ -364,7 +470,7 @@ export async function openSettings() {
   await loadPreferences();
 
   // Check for first-time setup
-  if (status && !status.env_keys_set.fish_audio) {
+  if (status && needsSetup(status)) {
     enterSetupMode();
   }
 }
@@ -388,7 +494,7 @@ export function isSettingsOpen(): boolean {
 export async function checkFirstTimeSetup(): Promise<boolean> {
   try {
     const status = await apiGet<StatusResponse>("/api/settings/status");
-    if (!status.env_keys_set.fish_audio) {
+    if (needsSetup(status)) {
       openSettings();
       return true;
     }

@@ -11,6 +11,22 @@ def _never_spawn_a_real_brain(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _speak_the_original_english_with_the_original_voice(monkeypatch):
+    """Every test hears the JARVIS the suite was written against: English,
+    and Fish Audio or nothing.
+
+    `server.py` loads the developer's `.env` into the environment at import,
+    and this fork's `.env.example` ships `JARVIS_LANGUAGE=zh-TW` — so without
+    this a developer who followed the setup would see every test that pins an
+    English sentence fail. A test of Mandarin, or of the browser voice, sets
+    the variable itself.
+    """
+    monkeypatch.setenv("JARVIS_LANGUAGE", "en")
+    monkeypatch.setenv("JARVIS_TTS", "fish")
+    monkeypatch.delenv("JARVIS_BROWSER_VOICE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_post_a_real_notification(monkeypatch, request):
     """No test may spam the developer's Notification Centre.
 

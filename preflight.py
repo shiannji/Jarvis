@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Optional
 
 import claude_env
+import i18n
 import screen
+import tts
 
 log = logging.getLogger("jarvis.preflight")
 
@@ -440,9 +442,23 @@ def _check_screen_recording_sync() -> Check:
 
 
 def _check_fish_api_key_sync() -> Check:
-    """FISH_API_KEY must be set or JARVIS has no voice."""
-    if os.environ.get("FISH_API_KEY"):
+    """FISH_API_KEY gives JARVIS the film's voice.
+
+    Without it he is no longer silent: unless `JARVIS_TTS=fish` says Fish
+    Audio or nothing, the page speaks with the browser's own voice instead
+    (tts.py). So a missing key is a failure only in that one mode, and a
+    warning — logged, never spoken — otherwise.
+    """
+    if tts.usable_key(os.environ.get("FISH_API_KEY")):
         return Check(name="fish_api_key", status=STATUS_OK, message="FISH_API_KEY is set.")
+    if tts.browser_fallback():
+        return Check(
+            name="fish_api_key",
+            status=STATUS_WARN,
+            message="FISH_API_KEY is not set; speaking with the browser's built-in voice.",
+            remedy=("For the JARVIS voice from the films, get a Fish Audio API key "
+                    "from fish.audio and set FISH_API_KEY in .env."),
+        )
     return Check(
         name="fish_api_key",
         status=STATUS_FAIL,
@@ -702,6 +718,24 @@ def _phrase_for(check: Check) -> str:
     return check.message
 
 
+_ZH_PHRASES = {
+    "claude_cli": "Claude Code 沒有安裝好或需要更新",
+    "claude_login": "Claude Code 還沒登入",
+    "accessibility": "我沒有輔助使用權限",
+    "screen_recording": "我沒有螢幕錄製權限",
+    "fish_api_key": "我沒有 Fish Audio 金鑰",
+    "anthropic_key_leftover": "環境裡還留著 Anthropic API 金鑰",
+    "cross_session_inbound": "跨對話傳訊還沒開啟",
+}
+
+
+def _zh_spoken_summary(issues: list["Check"]) -> str:
+    phrases = [_ZH_PHRASES.get(c.name, c.message) for c in issues]
+    head = (f"先生，有{i18n.zh_count(len(phrases))}件事需要處理："
+            if len(phrases) > 1 else "先生，有一件事需要處理：")
+    return head + "；".join(phrases) + "。"
+
+
 def spoken_summary(checks: list["Check"]) -> str:
     """One or two spoken sentences naming what's wrong, or "" when all is well.
 
@@ -712,6 +746,8 @@ def spoken_summary(checks: list["Check"]) -> str:
     issues = [c for c in checks if c.status != STATUS_OK]
     if not issues:
         return ""
+    if i18n.is_zh():
+        return _zh_spoken_summary(issues)
 
     phrases = [_phrase_for(c) for c in issues]
 

@@ -85,6 +85,7 @@ import dialog
 import jarvis_memory
 import notifier
 import tts
+import i18n
 from brain import Brain, BrainConfig, MAX_BOOT_PROJECTS
 from speech import Priority, SpeechScheduler
 
@@ -339,12 +340,29 @@ STT_CORRECTIONS = {
 }
 
 
+# Chrome's zh-TW recogniser, on the same two names. Plain substrings, not
+# `\b` patterns: there is no word boundary between two Han characters. The
+# near-misses of 賈維斯 go to 賈維斯 itself rather than to "JARVIS", so his own
+# name said back to him still tokenizes as the characters he said (speech.py).
+ZH_STT_CORRECTIONS = {
+    "克勞德扣德": "Claude Code",
+    "克勞德 code": "Claude Code",
+    "克勞德code": "Claude Code",
+    "克勞德": "Claude",
+    "加維斯": "賈維斯",
+    "嘉維斯": "賈維斯",
+    "佳維斯": "賈維斯",
+}
+
+
 def apply_speech_corrections(text: str) -> str:
     """Fix common speech-to-text errors before processing."""
     import re as _stt_re
     result = text
     for pattern, replacement in STT_CORRECTIONS.items():
         result = _stt_re.sub(pattern, replacement, result, flags=_stt_re.IGNORECASE)
+    for heard, meant in ZH_STT_CORRECTIONS.items():
+        result = result.replace(heard, meant)
     return result
 
 
@@ -506,7 +524,7 @@ session_clients: set = set()
 _tts_client: Optional[httpx.AsyncClient] = None
 _brain_notice_at = {"restarting": 0.0}
 _bg_tasks: set[asyncio.Task] = set()
-_CONTENT_FRAMES = ("audio", "text")
+_CONTENT_FRAMES = ("audio", "text", "speak")
 
 
 def _spawn(coro) -> asyncio.Task:
@@ -610,8 +628,34 @@ async def _voice_emit(msg: dict) -> None:
         raise NoVoiceClient("no voice client connected")
 
 
+def _voice_mode() -> str:
+    """`fish` or `browser`: which voice speaks a sentence by default. See
+    tts.py for `JARVIS_TTS`; the key is the one this process booted with."""
+    return tts.voice_mode(FISH_API_KEY)
+
+
+def _browser_voice_on() -> bool:
+    """Whether a sentence with no Fish audio is spoken by the page instead
+    of shown as text — the free voice, in either language."""
+    return tts.browser_fallback()
+
+
+# `JARVIS_BROWSER_VOICE` names the page's voice by a fragment of its name
+# ("Daniel", "Meijia", "Google 國語"). It reaches nothing but a string match
+# in the page, and still it is held to the shape of a name.
+_BROWSER_VOICE_NAME_RE = re.compile(r"[\w .()'\-（）]{1,60}")
+
+
+def _browser_voice_hint() -> str:
+    raw = os.getenv("JARVIS_BROWSER_VOICE", "").strip()
+    return raw if _BROWSER_VOICE_NAME_RE.fullmatch(raw) else ""
+
+
 async def _synth_for_speech(text: str) -> Optional[bytes]:
-    r = await tts.synthesize_chunk(text, api_key=FISH_API_KEY, voice_id=FISH_VOICE_ID, client=_tts_client)
+    if _voice_mode() == tts.VOICE_BROWSER:
+        return None          # the page speaks it; never spend a Fish request
+    r = await tts.synthesize_chunk(text, api_key=tts.usable_key(FISH_API_KEY),
+                                   voice_id=FISH_VOICE_ID, client=_tts_client)
     if r is None:
         return None
     _session_tokens["tts_calls"] += 1
@@ -642,6 +686,20 @@ def _fmt_reset(ts) -> str:
     return f"{when.strftime('%A %-d %B')} at {clock}"
 
 
+def _zh_reset(ts) -> str:
+    """`_fmt_reset`, said in Mandarin: 下午3點, 明天上午10點, 星期一上午10點."""
+    try:
+        when = datetime.fromtimestamp(float(ts))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "稍後"
+    return i18n.zh_when(when, datetime.now())
+
+
+def _usage_limit_line(ts) -> str:
+    return i18n.pick(f"I've hit the usage limit until {_fmt_reset(ts)}, sir.",
+                     f"先生，用量已到上限，要等到{_zh_reset(ts)}才會恢復。")
+
+
 # True but useless: "down" names neither cause nor remedy. When the brain's
 # failure is classified "auth" (brain.py's _classify_fatal_failure), speak
 # something the user can actually act on instead. Shared by _on_brain_state
@@ -650,6 +708,8 @@ def _fmt_reset(ts) -> str:
 # pre-existing generic line otherwise.
 _AUTH_BRAIN_DOWN_LINE = ("Claude Code's login has expired, sir — run `claude` in a "
                         "terminal and log in, then restart me.")
+_ZH_AUTH_BRAIN_DOWN_LINE = ("先生，Claude Code 的登入已經過期——請在終端機執行 claude "
+                           "重新登入，再把我重新啟動。")
 _AUTH_REMEDY_LOG_LINE = ("brain: giving up — Claude Code's OAuth login has expired. "
                          "Remedy: run `claude` in a terminal and log in, then restart JARVIS.")
 
@@ -657,6 +717,7 @@ _AUTH_REMEDY_LOG_LINE = ("brain: giving up — Claude Code's OAuth login has exp
 # whatever he last said has aged out of history): there is nothing held to
 # replay. Said, not silently ignored -- the user asked a question.
 NOTHING_TO_REPLAY_LINE = "I'm afraid I've nothing to repeat yet, sir."
+ZH_NOTHING_TO_REPLAY_LINE = "先生，我還沒說過任何話可以重複。"
 
 # Shown (never spoken) while a context rotation is in progress. Collecting the
 # handover and swapping the process takes a few seconds during which JARVIS
@@ -666,6 +727,7 @@ NOTHING_TO_REPLAY_LINE = "I'm afraid I've nothing to repeat yet, sir."
 # and he was right -- a visual is the honest signal, and the sentence was
 # noise. So: a banner and an orb state for the duration, and nothing said.
 ROTATION_BUSY_LINE = "Gathering my thoughts — one moment, sir."
+ZH_ROTATION_BUSY_LINE = "整理思緒中——請稍候，先生。"
 
 # Said by the user, not by JARVIS. A memory writer is refused for as long as
 # anything foreign sits in the generation that would compose it — a web page,
@@ -683,12 +745,25 @@ FRESH_START_PHRASES = (
     "new conversation", "forget this conversation", "wipe your memory of this",
 )
 FRESH_START_LINE = "Cleared, sir — nothing of that conversation left. Go ahead."
+ZH_FRESH_START_LINE = "已經清空了，先生——剛才的對話一點不留。請說。"
+
+# The same request in Mandarin. Matched on the WHOLE utterance with its
+# padding trimmed (`i18n.zh_core`), never as a substring: 重新開始 is also how
+# you ask for a run to start again, and "幫我重新開始那個 run" must reach the
+# brain rather than wipe it.
+ZH_FRESH_START_PHRASES = frozenset({
+    "重新開始", "從頭開始", "重來", "重新來過", "開新對話", "開一個新對話",
+    "新的對話", "清空對話", "清除對話", "清空你的腦袋", "清空你的思緒",
+    "忘掉這段對話", "忘記這段對話", "忘了這段對話",
+})
 
 
 def _is_fresh_start(text: str) -> bool:
     """Whether the user just asked for a clean generation."""
     t = " ".join(_action_words(text))
-    return any(p in t for p in FRESH_START_PHRASES)
+    if any(p in t for p in FRESH_START_PHRASES):
+        return True
+    return i18n.zh_core(text) in ZH_FRESH_START_PHRASES
 
 
 def _action_words(text: str) -> list[str]:
@@ -707,23 +782,25 @@ async def _on_brain_state(state: str, info: dict) -> None:
         now = time.time()
         if now - _brain_notice_at["restarting"] > 60:
             _brain_notice_at["restarting"] = now
-            await speech.say("Rebooting my language systems, one moment.", Priority.NORMAL)
+            await speech.say(i18n.pick("Rebooting my language systems, one moment.",
+                                       "語言系統重新啟動中，請稍候。"), Priority.NORMAL)
     elif state == "failed":
-        line = (_AUTH_BRAIN_DOWN_LINE if info.get("failure_reason") == "auth"
-               else "My language systems are down, sir. Check the server log.")
+        line = (i18n.pick(_AUTH_BRAIN_DOWN_LINE, _ZH_AUTH_BRAIN_DOWN_LINE)
+                if info.get("failure_reason") == "auth"
+                else i18n.pick("My language systems are down, sir. Check the server log.",
+                               "先生，我的語言系統停擺了，請查看伺服器紀錄。"))
         await speech.say(line, Priority.URGENT, immediate=True)
     elif state == "rate_limited":
-        await speech.say(f"I've hit the usage limit until {_fmt_reset(info.get('resets_at'))}, sir.",
-                         Priority.NORMAL)
+        await speech.say(_usage_limit_line(info.get('resets_at')), Priority.NORMAL)
 
 
 def _greeting() -> str:
     hour = datetime.now().hour
     if hour < 12:
-        return "Good morning, sir."
+        return i18n.pick("Good morning, sir.", "早安，先生。")
     if hour < 17:
-        return "Good afternoon, sir."
-    return "Good evening, sir."
+        return i18n.pick("Good afternoon, sir.", "午安，先生。")
+    return i18n.pick("Good evening, sir.", "晚上好，先生。")
 
 
 def _tool_connect_host(bind_host: str) -> str:
@@ -942,7 +1019,8 @@ async def start_brain_and_speech() -> None:
     global brain_instance, speech, _tts_client
     _tts_client = httpx.AsyncClient(timeout=15.0)
     speech = SpeechScheduler(lambda t: _synth_for_speech(t), _voice_emit, prepare=strip_markdown_for_tts,
-                             transport_ready=lambda: bool(voice_clients))
+                             transport_ready=lambda: bool(voice_clients),
+                             browser_voice=lambda: _browser_voice_on())
     await speech.start()
     # ensure_layout() rather than ensure_brain_home(): the persona's
     # `@MEMORY.md` import needs the index to exist, and the memory tools
@@ -1070,11 +1148,12 @@ async def _start_fresh() -> None:
         except Exception as e:
             log.error(f"fresh start failed: {e}", exc_info=True)
             if speech is not None:
-                await speech.say("I couldn't clear it, sir.", Priority.NORMAL)
+                await speech.say(i18n.pick("I couldn't clear it, sir.",
+                                           "先生，我清不掉。"), Priority.NORMAL)
             return
     log.info("fresh start: generation discarded at the user's request")
     if speech is not None:
-        await speech.say(FRESH_START_LINE, Priority.NORMAL)
+        await speech.say(i18n.pick(FRESH_START_LINE, ZH_FRESH_START_LINE), Priority.NORMAL)
 
 
 async def _maybe_rotate() -> None:
@@ -1105,7 +1184,8 @@ async def _maybe_rotate() -> None:
         # Say so before the pause, not after it: everything below this line
         # takes seconds during which nothing answers.
         try:
-            await _voice_emit({"type": "notice", "text": ROTATION_BUSY_LINE})
+            await _voice_emit({"type": "notice",
+                               "text": i18n.pick(ROTATION_BUSY_LINE, ZH_ROTATION_BUSY_LINE)})
             # The orb dims and slows for the duration; see the "compacting"
             # state in frontend/src/orb.ts.
             await _voice_emit({"type": "status", "state": "compacting"})
@@ -1252,16 +1332,19 @@ async def _announce_needs_you(event: dict) -> None:
     # project, and `_plain_name` forbids a space, so it erased nine real
     # names out of ten in the one interrupt whose whole job is to say WHICH
     # session wants him. See `_said_name` for the wall that fits this field.
-    name = _said_name(s, "A session")
+    name = _said_name(s, i18n.pick("A session", "有一個對話"))
     needs = s.get("needs")
     if needs:
         reason = _phrase_needs(needs)
         if s.get("needs_a_human_hand"):
-            line = f"{name} is {reason}, sir — that one needs your own keystroke."
+            line = i18n.pick(f"{name} is {reason}, sir — that one needs your own keystroke.",
+                             f"先生，{name}{_zh_phrase_needs(needs)}——那個需要你親自按鍵。")
         else:
-            line = f"{name} is {reason}, sir."
+            line = i18n.pick(f"{name} is {reason}, sir.",
+                             f"先生，{name}{_zh_phrase_needs(needs)}。")
     else:
-        line = f"{name} has stopped and wants you, sir."
+        line = i18n.pick(f"{name} has stopped and wants you, sir.",
+                         f"先生，{name}停下來了，在等你。")
     try:
         await speech.say(line, Priority.URGENT)
     except Exception as e:
@@ -1311,7 +1394,19 @@ def _cap_listing(items: list[str]) -> str:
     return _list_join(items[:3]) + f", and {_say_number(remaining)} {other_word}"
 
 
+def _zh_cap_listing(items: list[str]) -> str:
+    """`_cap_listing` in Mandarin: three names, then how many more."""
+    if len(items) <= 3:
+        return i18n.zh_join(items)
+    return f"{i18n.zh_join(items[:3])}，還有另外{i18n.zh_count(len(items) - 3)}個"
+
+
 def _session_batch_line(names: list[str]) -> str:
+    if i18n.is_zh():
+        if len(names) == 1:
+            return f"先生，{names[0]} 完成了。"
+        return (f"先生，有{i18n.zh_count(len(names))}個對話完成了："
+                f"{_zh_cap_listing(names)}。")
     if len(names) == 1:
         return f"{names[0]} has finished, sir."
     return (f"{_say_number(len(names)).capitalize()} conversations have "
@@ -1324,6 +1419,10 @@ def _run_batch_line(projects: list[str]) -> str:
     Failures never reach here — they interrupt (see `_announce_run_failure`) —
     so "is done" is an honest report of success, not a euphemism for "ended".
     """
+    if i18n.is_zh():
+        if len(projects) == 1:
+            return f"先生，{projects[0]} 的工作完成了。"
+        return f"先生，{_zh_cap_listing(projects)} 的工作都完成了。"
     if len(projects) == 1:
         return f"The work in {projects[0]} is done, sir."
     return f"Work in {_cap_listing(projects)} is done, sir."
@@ -1425,11 +1524,13 @@ async def _announce_run_stalled(run: dict, outcome: str) -> None:
         return
     project = _run_project(run)
     if outcome == stream_parser.STALLED:
-        line = (f"The work in {project} stopped to ask a question, sir, so "
-                f"nothing was built.")
+        line = i18n.pick(f"The work in {project} stopped to ask a question, sir, so "
+                         f"nothing was built.",
+                         f"先生，{project} 的工作停下來問了一個問題，所以什麼都還沒建好。")
     else:
-        line = (f"The work in {project} finished, sir, but I can't see that "
-                f"it changed anything.")
+        line = i18n.pick(f"The work in {project} finished, sir, but I can't see that "
+                         f"it changed anything.",
+                         f"先生，{project} 的工作結束了，但我看不出它改了任何東西。")
     try:
         await speech.say(line, Priority.URGENT)
     except Exception as e:
@@ -1442,9 +1543,11 @@ async def _announce_run_failure(run: dict) -> None:
         return
     project = _run_project(run)
     if run.get("status") == run_store.RunStatus.TIMED_OUT:
-        line = f"The work in {project} ran out of time, sir."
+        line = i18n.pick(f"The work in {project} ran out of time, sir.",
+                         f"先生，{project} 的工作超時了。")
     else:
-        line = f"The work in {project} failed, sir."
+        line = i18n.pick(f"The work in {project} failed, sir.",
+                         f"先生，{project} 的工作失敗了。")
     try:
         await speech.say(line, Priority.URGENT)
     except Exception as e:
@@ -1621,6 +1724,11 @@ class _OneLinePerTurn:
             self._sink(text)
 
 
+def _lost_thread_line() -> str:
+    return i18n.pick("I lost my train of thought, sir. Say that again?",
+                     "先生，我剛才思路斷了，可以再說一次嗎？")
+
+
 async def _handle_utterance(text: str) -> None:
     """One user utterance → one brain turn → streamed speech. Runs as a task so
     the socket loop keeps receiving `played` acks and interim text meanwhile."""
@@ -1630,11 +1738,13 @@ async def _handle_utterance(text: str) -> None:
     await _voice_emit({"type": "status", "state": "thinking"})
     if not brain_instance.ready:
         if brain_instance.failed:
-            line = (_AUTH_BRAIN_DOWN_LINE
+            line = (i18n.pick(_AUTH_BRAIN_DOWN_LINE, _ZH_AUTH_BRAIN_DOWN_LINE)
                     if getattr(brain_instance, "failure_reason", None) == "auth"
-                    else "My language systems are down, sir.")
+                    else i18n.pick("My language systems are down, sir.",
+                                   "先生，我的語言系統停擺了。"))
         else:
-            line = "One moment, sir — my language systems are still starting."
+            line = i18n.pick("One moment, sir — my language systems are still starting.",
+                             "請稍候，先生——語言系統還在啟動。")
         await speech.say(line, Priority.NORMAL)
         return
     utt = speech.begin_turn()
@@ -1650,17 +1760,18 @@ async def _handle_utterance(text: str) -> None:
                 await speech.end_turn(utt)  # a turn that never ends would wedge the mouth
         except Exception as e:
             log.error(f"brain turn failed: {e}", exc_info=True)
-            await speech.say("I lost my train of thought, sir. Say that again?", Priority.NORMAL)
+            await speech.say(_lost_thread_line(), Priority.NORMAL)
             return
         if result.stop_reason == "rate_limited":
             resets = (result.rate_limit or {}).get("resetsAt")
-            await speech.say(f"I've hit the usage limit until {_fmt_reset(resets)}, sir.", Priority.NORMAL)
+            await speech.say(_usage_limit_line(resets), Priority.NORMAL)
         elif result.stop_reason == "error":
             log.error(f"brain error: {result.error}")
-            await speech.say("My language systems returned an error, sir. Check the server log.",
+            await speech.say(i18n.pick("My language systems returned an error, sir. Check the server log.",
+                                       "先生，我的語言系統回報了錯誤，請查看伺服器紀錄。"),
                              Priority.NORMAL)
         elif result.stop_reason in ("timeout", "died", "not_running"):
-            await speech.say("I lost my train of thought, sir. Say that again?", Priority.NORMAL)
+            await speech.say(_lost_thread_line(), Priority.NORMAL)
         elif not result.text.strip():
             await _voice_emit({"type": "status", "state": "idle"})
         log.info(f"JARVIS: {result.text.strip()[:300]}")
@@ -2988,6 +3099,22 @@ def _phrase_needs(reason: str) -> str:
     return f"waiting on {_plain_phrase(reason, 'something I cannot name')}"
 
 
+_ZH_NEEDS_PHRASES = {
+    "permission prompt": "在等你確認權限",
+    "dialog open": "開著一個對話框在等你",
+    "input needed": "在等你輸入",
+}
+
+
+def _zh_phrase_needs(reason: str) -> str:
+    """`_phrase_needs` for a sentence said in Mandarin — the same wall on an
+    unrecognised reason, which stays in the roster's own words."""
+    known = _ZH_NEEDS_PHRASES.get(reason)
+    if known is not None:
+        return known
+    return f"在等你處理 {_plain_phrase(reason, '某件事')}"
+
+
 def _session_line(s, now) -> str:
     """One conversation, in full: state, why it's waiting (if it is), age,
     what it's on, and whether JARVIS can reach it."""
@@ -3355,8 +3482,13 @@ def _inbound_caveat() -> str:
     """The half-sentence that stops "sent" from being a lie."""
     if _inbound_accepted():
         return ""
-    return (" It'll ask you to approve it first — say the word and I'll set "
-            "your sessions to accept them.")
+    return i18n.pick(" It'll ask you to approve it first — say the word and I'll set "
+                     "your sessions to accept them.",
+                     "它會先請你核准——你說一聲，我就把你的對話設定成直接接受。")
+
+
+def _cancelled_line() -> str:
+    return i18n.pick("Cancelled, sir.", "已取消，先生。")
 
 
 async def _perform_staged_steers() -> None:
@@ -3408,7 +3540,8 @@ async def _perform_steer(item: _StagedSteer) -> None:
         if speech is None:
             record("no_voice")             # the mouth went away between turns
             return
-        utt = await speech.say(f"Telling {_said_name(item)}: {item.prompt}",
+        utt = await speech.say(i18n.pick(f"Telling {_said_name(item)}: {item.prompt}",
+                                         f"要告訴 {_said_name(item)}：{item.prompt}"),
                                Priority.NORMAL)
         # Wait for the read-back to actually finish PLAYING (not merely be
         # queued — see READBACK_TIMEOUT) before opening the cancel window.
@@ -3423,7 +3556,7 @@ async def _perform_steer(item: _StagedSteer) -> None:
                 record("readback_failed")
                 return
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
         if not heard:
             # TTS wedged or the transport was abandoned mid-utterance: never
@@ -3432,7 +3565,7 @@ async def _perform_steer(item: _StagedSteer) -> None:
             return
         if await speech.open_cancel_window(STEER_CANCEL_WINDOW):
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
 
         outcome = await asyncio.to_thread(
@@ -3451,15 +3584,19 @@ async def _perform_steer(item: _StagedSteer) -> None:
             # here, so it is no longer asserted — and when the setting says
             # the message WILL need approving, that is said in the same
             # breath rather than left for the user to discover.
-            await speech.say(f"Passed to {_said_name(item)}, sir."
+            await speech.say(i18n.pick(f"Passed to {_said_name(item)}, sir.",
+                                       f"已轉交給 {_said_name(item)}，先生。")
                              + _inbound_caveat(), Priority.NORMAL)
         elif outcome == session_steer.NOT_LIVE:
-            await speech.say(
+            await speech.say(i18n.pick(
                 f"{_said_name(item)} didn't answer its socket, sir — it may "
-                f"have just exited.", Priority.NORMAL)
+                f"have just exited.",
+                f"先生，{_said_name(item)} 沒有回應——它可能剛結束了。"), Priority.NORMAL)
         else:
-            await speech.say(f"I couldn't deliver that to {_said_name(item)}, "
-                             f"sir.", Priority.NORMAL)
+            await speech.say(i18n.pick(f"I couldn't deliver that to {_said_name(item)}, "
+                                       f"sir.",
+                                       f"先生，我沒辦法把訊息送到 {_said_name(item)}。"),
+                             Priority.NORMAL)
     except Exception:
         record("failed")                   # the audit trail must never have a gap
         raise
@@ -3508,9 +3645,11 @@ async def _perform_command(item: _StagedCommand) -> None:
         # undocumented command is not refused, it is flagged out loud, and the
         # user gets the cancel window to act on it.
         caveat = "" if item.documented else \
-            " That isn't a command the project documents, mind."
+            i18n.pick(" That isn't a command the project documents, mind.",
+                      "提醒一下，這不是專案文件裡寫的指令。")
         utt = await speech.say(
-            f"Running {item.command} in {item.project}, sir.{caveat}",
+            i18n.pick(f"Running {item.command} in {item.project}, sir.{caveat}",
+                      f"先生，要在 {item.project} 執行 {item.command}。{caveat}"),
             Priority.NORMAL)
         heard = await speech.wait_for(utt, timeout=READBACK_TIMEOUT)
         if utt.was_cancelled:
@@ -3518,14 +3657,14 @@ async def _perform_command(item: _StagedCommand) -> None:
                 record("readback_failed")
                 return
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
         if not heard:
             record("readback_failed")
             return
         if await speech.open_cancel_window(STEER_CANCEL_WINDOW):
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
 
         # `cd` into the project first: a start command means nothing in the
@@ -3537,10 +3676,12 @@ async def _perform_command(item: _StagedCommand) -> None:
         if result.get("success"):
             record("ran")
             await speech.say(
-                f"Running in a Terminal window, sir.", Priority.NORMAL)
+                i18n.pick(f"Running in a Terminal window, sir.",
+                          "已經在終端機視窗裡執行了，先生。"), Priority.NORMAL)
         else:
             record("failed")
-            await speech.say("Terminal wouldn't open, sir.", Priority.NORMAL)
+            await speech.say(i18n.pick("Terminal wouldn't open, sir.",
+                                       "先生，終端機打不開。"), Priority.NORMAL)
     except Exception:
         record("failed")                   # the audit trail must never have a gap
         raise
@@ -3592,6 +3733,15 @@ async def _perform_staged_dialogs() -> None:
                       exc_info=True)
 
 
+def _zh_spoken_key(normalized: str) -> str:
+    """`dialog.spoken_key` in Mandarin: Enter 鍵, Esc 鍵, or 3 號選項."""
+    if normalized == "return":
+        return " Enter 鍵"
+    if normalized == "escape":
+        return " Esc 鍵"
+    return f" {normalized} 號選項"
+
+
 async def _perform_dialog(item: _StagedDialog) -> None:
     """One staged keypress, start to finish. Records EXACTLY one audit row.
 
@@ -3603,6 +3753,7 @@ async def _perform_dialog(item: _StagedDialog) -> None:
     """
     recorded = False
     said = dialog.spoken_key(item.key)
+    zh_said = _zh_spoken_key(item.key)
 
     def record(outcome: str) -> None:
         nonlocal recorded
@@ -3618,46 +3769,57 @@ async def _perform_dialog(item: _StagedDialog) -> None:
             return
         # The read-back names the key AND warns about the focus theft, because
         # the window coming forward is the part that interrupts the user.
-        utt = await speech.say(
+        utt = await speech.say(i18n.pick(
             f"Pressing {said} on {_said_name(item)} — this will bring that "
-            f"window forward.", Priority.NORMAL)
+            f"window forward.",
+            f"要在 {_said_name(item)} 按下{zh_said}——這會把那個視窗拉到最前面。"),
+            Priority.NORMAL)
         heard = await speech.wait_for(utt, timeout=READBACK_TIMEOUT)
         if utt.was_cancelled:
             if getattr(utt, "was_abandoned", False):
                 record("readback_failed")
                 return
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
         if not heard:
             record("readback_failed")
             return
         if await speech.open_cancel_window(STEER_CANCEL_WINDOW):
             record("cancelled_by_user")
-            await speech.say("Cancelled, sir.", Priority.NORMAL)
+            await speech.say(_cancelled_line(), Priority.NORMAL)
             return
 
         outcome = await dialog.answer(item.pid, item.key)
         record(outcome)
         if outcome == dialog.SENT:
-            await speech.say(f"Pressed {said} on {_said_name(item)}.",
+            await speech.say(i18n.pick(f"Pressed {said} on {_said_name(item)}.",
+                                       f"已經在 {_said_name(item)} 按下{zh_said}了。"),
                              Priority.NORMAL)
         elif outcome == dialog.NOT_FOUND:
-            await speech.say(
+            await speech.say(i18n.pick(
                 f"{_said_name(item)} isn't in a Terminal window I can reach, "
                 f"sir — another application is hosting it, so that one needs "
-                f"your own hand.", Priority.NORMAL)
+                f"your own hand.",
+                f"先生，{_said_name(item)} 不在我能操作的終端機視窗裡——它由別的"
+                f"程式開著，那個得你親自按。"), Priority.NORMAL)
         elif outcome == dialog.NOT_PERMITTED:
-            await speech.say(
+            await speech.say(i18n.pick(
                 "macOS won't let me send keystrokes, sir — I'd need accessibility "
-                "permission in System Settings.", Priority.NORMAL)
+                "permission in System Settings.",
+                "先生，macOS 不讓我送出按鍵——需要在系統設定裡給我輔助使用權限。"),
+                Priority.NORMAL)
         elif outcome == dialog.NO_TTY:
-            await speech.say(
+            await speech.say(i18n.pick(
                 f"{_said_name(item)} has no terminal of its own any more, "
-                f"sir — I pressed nothing.", Priority.NORMAL)
+                f"sir — I pressed nothing.",
+                f"先生，{_said_name(item)} 已經沒有自己的終端機了——我什麼都沒按。"),
+                Priority.NORMAL)
         else:
-            await speech.say(f"I couldn't press that for {_said_name(item)}, "
-                             f"sir.", Priority.NORMAL)
+            await speech.say(i18n.pick(f"I couldn't press that for {_said_name(item)}, "
+                                       f"sir.",
+                                       f"先生，我沒辦法幫 {_said_name(item)} 按那個鍵。"),
+                             Priority.NORMAL)
     except Exception:
         record("failed")                   # the audit trail must never have a gap
         raise
@@ -4016,6 +4178,11 @@ _MODEL_MISHEARINGS = {
     "opus five": "opus", "campus": "opus",
     "haiko": "haiku", "high coo": "haiku", "haiku's": "haiku",
     "table": "fable", "fabel": "fable", "fable five": "fable",
+    # ...and as Chrome's zh-TW recogniser writes them down, or as a Mandarin
+    # speaker translates them: Sonnet is 十四行詩 and Haiku is 俳句.
+    "歐帕斯": "opus", "奧帕斯": "opus", "歐普斯": "opus",
+    "桑內特": "sonnet", "索內特": "sonnet", "十四行詩": "sonnet",
+    "俳句": "haiku", "海酷": "haiku", "寓言": "fable",
 }
 
 
@@ -6594,7 +6761,12 @@ async def voice_handler(ws: WebSocket):
         # Through this client's own queue, not straight down the socket, so
         # the opening frames cannot be overtaken by a broadcast that lands
         # while they are in flight.
-        _enqueue(queue, {"type": "config", "muteMicDuringSpeech": MUTE_MIC_DURING_SPEECH})
+        # `lang` is what the page's recogniser listens for, `voice` which
+        # voice speaks by default, `browserVoice` an optional name fragment
+        # choosing among the page's own voices (see tts.py, i18n.py).
+        _enqueue(queue, {"type": "config", "muteMicDuringSpeech": MUTE_MIC_DURING_SPEECH,
+                         "lang": i18n.speech_lang(), "voice": _voice_mode(),
+                         "browserVoice": _browser_voice_hint()})
         _enqueue(queue, {"type": "status", "state": "idle"})
 
         global _last_greeting_time
@@ -6662,7 +6834,8 @@ async def voice_handler(ws: WebSocket):
                     # with different words. Never routed to _handle_utterance.
                     log.info(f"User (replay): {text}")
                     if not await speech.replay_last():
-                        await speech.say(NOTHING_TO_REPLAY_LINE, Priority.NORMAL)
+                        await speech.say(i18n.pick(NOTHING_TO_REPLAY_LINE, ZH_NOTHING_TO_REPLAY_LINE),
+                                         Priority.NORMAL)
                     continue
                 if verdict != "speech":
                     # Say WHY, so a dropped sentence can be diagnosed from the
@@ -6702,7 +6875,15 @@ async def voice_handler(ws: WebSocket):
 # a restart.
 SETTABLE_ENV_KEYS = frozenset({
     "FISH_API_KEY", "FISH_VOICE_ID", "USER_NAME", "HONORIFIC",
+    "JARVIS_LANGUAGE", "JARVIS_TTS", "JARVIS_BROWSER_VOICE",
 })
+
+# Settings that are a CHOICE, not free text. Whatever else is wrong with a
+# value, one of these is refused unless it is exactly one of its options.
+ENV_CHOICES = {
+    "JARVIS_LANGUAGE": i18n.SUPPORTED,
+    "JARVIS_TTS": tts.TTS_MODES,
+}
 
 # A value may not carry anything that ends the line it is written on.
 #
@@ -6732,7 +6913,7 @@ SETTABLE_ENV_KEYS = frozenset({
 # tighter one. Held against SETTABLE_ENV_KEYS itself by tests/test_bounds.py,
 # so a key added later is bounded the day it is added.
 ENV_VALUE_MAX_CHARS = 500
-ENV_NAME_KEYS = frozenset({"USER_NAME", "HONORIFIC"})
+ENV_NAME_KEYS = frozenset({"USER_NAME", "HONORIFIC", "JARVIS_BROWSER_VOICE"})
 ENV_NAME_MAX_CHARS = 64
 
 # `str.splitlines()` covers the ten separators; this covers what is left of
@@ -6761,6 +6942,11 @@ def _env_value_problem(key: str, value: str) -> str | None:
         return "A setting cannot contain a control character"
     if _parse_env_lines(f"{key}={value}") != [(key, value)]:
         return "A setting cannot begin or end with a space or a quote"
+    choices = ENV_CHOICES.get(key)
+    if choices is not None and value not in choices:
+        return f"{key} must be one of: {', '.join(choices)}"
+    if key == "JARVIS_BROWSER_VOICE" and value and not _BROWSER_VOICE_NAME_RE.fullmatch(value):
+        return "A voice name may hold letters, digits, spaces and ( ) . ' - only"
     return None
 
 
@@ -6839,6 +7025,11 @@ class KeyTest(BaseModel):
 class PreferencesUpdate(BaseModel):
     user_name: str = ""
     honorific: str = "sir"
+    # Left out (None) means "leave it as it is": the older settings panel
+    # posts only the two fields above.
+    language: str | None = None
+    voice: str | None = None
+    browser_voice: str | None = None
 
 @app.post("/api/settings/keys")
 async def api_settings_keys(body: KeyUpdate):
@@ -6878,6 +7069,11 @@ async def api_settings_status():
         "claude_code_installed": claude_installed,
         "server_port": 8340,
         "uptime_seconds": int(time.time() - _session_start),
+        # What this process is ACTUALLY doing — the language and voice it
+        # booted with — which a saved-but-not-restarted .env may not match.
+        "language": i18n.language(),
+        "voice": _voice_mode(),
+        "tts_mode": tts.tts_mode(),
         "env_keys_set": {
             "fish_audio": bool(env_dict.get("FISH_API_KEY", "").strip() and env_dict.get("FISH_API_KEY", "") != "your-fish-audio-api-key-here"),
             "fish_voice_id": bool(env_dict.get("FISH_VOICE_ID", "").strip()),
@@ -6891,6 +7087,11 @@ async def api_get_preferences():
     return {
         "user_name": env_dict.get("USER_NAME", ""),
         "honorific": env_dict.get("HONORIFIC", "sir"),
+        # Normalised, so the panel's two menus can show any spelling a
+        # hand-edited .env holds ("zh_tw", "Browser").
+        "language": i18n.normalize(env_dict.get("JARVIS_LANGUAGE", i18n.language())),
+        "voice": tts.normalize_mode(env_dict.get("JARVIS_TTS", tts.tts_mode())),
+        "browser_voice": env_dict.get("JARVIS_BROWSER_VOICE", ""),
     }
 
 @app.post("/api/settings/preferences")
@@ -6898,13 +7099,18 @@ async def api_save_preferences(body: PreferencesUpdate):
     # Validate both before writing either, so a bad honorific cannot leave
     # the name half-saved.
     try:
-        for key, value in (("USER_NAME", body.user_name),
-                           ("HONORIFIC", body.honorific)):
+        pairs = [("USER_NAME", body.user_name), ("HONORIFIC", body.honorific)]
+        for key, value in (("JARVIS_LANGUAGE", body.language),
+                           ("JARVIS_TTS", body.voice),
+                           ("JARVIS_BROWSER_VOICE", body.browser_voice)):
+            if value is not None:
+                pairs.append((key, value))
+        for key, value in pairs:
             problem = _env_value_problem(key, value)
             if problem:
                 raise ValueError(problem)
-        _write_env_key("USER_NAME", body.user_name)
-        _write_env_key("HONORIFIC", body.honorific)
+        for key, value in pairs:
+            _write_env_key(key, value)
     except ValueError as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=400)
     return {"success": True}

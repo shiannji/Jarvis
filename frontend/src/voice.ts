@@ -6,6 +6,8 @@
  * chunks; each one is acknowledged to the server when it finishes.
  */
 
+import { t, lang as rememberedLang } from "./i18n";
+
 // ---------------------------------------------------------------------------
 // Voice Input
 // ---------------------------------------------------------------------------
@@ -18,6 +20,10 @@ export interface VoiceInput {
   /** Tear the recogniser down and build a new one, now. For when it is
    *  provably deaf: capturing audio and returning nothing. */
   restart(reason: string): void;
+  /** Listen in another language (a BCP-47 tag: "en-US", "zh-TW"). A
+   *  recogniser cannot change language mid-session, so a live one is
+   *  replaced; one that is not running simply starts in it later. */
+  setLang(lang: string): void;
 }
 
 const INTERIM_THROTTLE_MS = 200;
@@ -151,10 +157,14 @@ export function createVoiceInput(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const SR = (window as any).SpeechRecognition || (typeof webkitSpeechRecognition !== "undefined" ? webkitSpeechRecognition : null);
   if (!SR) {
-    onError("Speech recognition not supported in this browser");
+    onError(t("srUnsupported"));
     onMicEvent("no SpeechRecognition in this browser");
-    return { start() {}, stop() {}, pause() {}, resume() {}, restart() {} };
+    return { start() {}, stop() {}, pause() {}, resume() {}, restart() {}, setLang() {} };
   }
+
+  // What the page was last told, until the server's config frame says
+  // otherwise: a reload should not spend its first sentence in English.
+  let lang: string = rememberedLang();
 
   let shouldListen = false;
   let paused = false;
@@ -229,7 +239,7 @@ export function createVoiceInput(
     const sr = new SR();
     sr.continuous = true;
     sr.interimResults = true;
-    sr.lang = "en-US";
+    sr.lang = lang;
     const e: Engine = { sr, running: false, audio: false, startedAt: 0, stoppedAt: 0, retired: false };
 
     sr.onstart = () => {
@@ -357,7 +367,7 @@ export function createVoiceInput(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function handleError(event: any, e: Engine) {
     if (event.error === "not-allowed") {
-      onError("Microphone blocked — retrying. Check this origin's mic permission.");
+      onError(t("micBlocked"));
       waitingForRetry = true;
       const delay = retryDelay;
       retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
@@ -370,11 +380,11 @@ export function createVoiceInput(
     } else if (event.error === "no-speech" || event.error === "aborted") {
       // Routine. With rotation running there is normally a live twin already.
     } else if (event.error === "audio-capture") {
-      onError("Another app has taken the microphone — quit it, then reload.");
+      onError(t("micTaken"));
     } else if (event.error === "network") {
-      onError("Speech recognition lost its connection — that sentence was dropped.");
+      onError(t("srNetwork"));
     } else {
-      onError(`Speech recognition error: ${event.error}`);
+      onError(`${t("srError")}${event.error}`);
     }
     if (!e.retired) mark(`error: ${event.error}`);
   }
@@ -391,7 +401,7 @@ export function createVoiceInput(
       if (idle < STALL_AFTER_MS) return;
       if (Date.now() - stallNoticeAt > 30000) {
         stallNoticeAt = Date.now();
-        onError("Microphone stalled — restarting it.");
+        onError(t("micStalled"));
       }
       mark("watchdog: nothing listening; restarting");
       startSpare();
@@ -455,6 +465,12 @@ export function createVoiceInput(
         if (!anyoneListening()) startSpare();
         scheduleRotate();
       }
+    },
+    setLang(next: string) {
+      if (!next || next === lang) return;
+      lang = next;
+      mark(`language: ${next}`);
+      if (anyoneListening()) this.restart(`listening in ${next} now`);
     },
     restart(reason: string) {
       if (!shouldListen || paused) return;

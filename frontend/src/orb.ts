@@ -18,6 +18,9 @@ export type OrbState = "idle" | "listening" | "thinking" | "speaking" | "compact
 export interface Orb {
   setState(s: OrbState): void;
   setAnalyser(a: AnalyserNode | null): void;
+  /** A second source of loudness, for speech that never passes through the
+   *  analyser (the browser's own voice). The louder of the two drives the orb. */
+  setLevels(fn: (() => { bass: number; mid: number } | null) | null): void;
   destroy(): void;
 }
 
@@ -121,6 +124,7 @@ export function createOrb(canvas: HTMLCanvasElement): Orb {
   let analyser: AnalyserNode | null = null;
   let freqData = new Uint8Array(64);
   let bass = 0, mid = 0;
+  let levels: (() => { bass: number; mid: number } | null) | null = null;
 
   const clock = new THREE.Clock();
 
@@ -173,6 +177,11 @@ export function createOrb(canvas: HTMLCanvasElement): Orb {
       for (let i = 0; i < 8; i++) bSum += freqData[i];
       for (let i = 8; i < 24; i++) mSum += freqData[i];
       bass = bSum / (8 * 255); mid = mSum / (16 * 255);
+    }
+    const external = levels?.();
+    if (external) {
+      bass = Math.max(bass, external.bass);
+      mid = Math.max(mid, external.mid);
     }
 
     // Depth Z breathing
@@ -339,6 +348,9 @@ export function createOrb(canvas: HTMLCanvasElement): Orb {
     setAnalyser(a: AnalyserNode | null) {
       analyser = a;
       if (a) freqData = new Uint8Array(a.frequencyBinCount);
+    },
+    setLevels(fn) {
+      levels = fn;
     },
     destroy() {
       destroyed = true;
