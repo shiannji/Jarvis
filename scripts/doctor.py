@@ -23,7 +23,7 @@ def _load_dotenv() -> None:
     env = REPO / ".env"
     if not env.exists():
         return
-    for line in env.read_text().splitlines():
+    for line in env.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
@@ -34,6 +34,12 @@ _MARKS = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}
 
 
 async def main() -> int:
+    # A terminal that cannot show Chinese gets "?" in their place, not a
+    # traceback: a report with question marks in it is still a report.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
     _load_dotenv()
     import i18n
     import preflight

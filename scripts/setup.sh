@@ -63,7 +63,11 @@ for candidate in python3.13 python3.12 python3.11 python3; do
   fi
 done
 [[ -n "$PY" ]] || die "找不到 Python 3.11 以上。請先安裝：brew install python@3.12"
-ok "Python $("$PY" -c 'import platform; print(platform.python_version())')（$PY）"
+# ${PY}, braced: macOS's bash 3.2 counts the first byte of a full-width
+# character as part of a variable's name, so "$PY）" reads a variable called
+# PY plus that byte and dies under `set -u`. Every variable next to Chinese
+# text is braced (tests/test_shell_scripts.py holds the line).
+ok "Python $("$PY" -c 'import platform; print(platform.python_version())')（${PY}）"
 
 command -v node >/dev/null 2>&1 || die "找不到 Node.js。請先安裝：brew install node"
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
@@ -136,7 +140,9 @@ import sys
 
 key, value = sys.argv[1], sys.argv[2]
 path = pathlib.Path(".env")
-lines = path.read_text().splitlines() if path.exists() else []
+# UTF-8 always, never the locale's encoding: read as Latin-1, the 0x85 byte
+# inside 內 or 腦 decodes to NEL, which splitlines() treats as a line break.
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 out, found = [], False
 for line in lines:
     s = line.strip()
@@ -147,7 +153,7 @@ for line in lines:
         out.append(line)
 if not found:
     out.append(f"{key}={value}")
-path.write_text("\n".join(out) + "\n")
+path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PYEOF
 }
 
