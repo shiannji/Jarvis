@@ -103,7 +103,10 @@ arbitrary LLM and file content, so everything goes through
   `speak` frames, acked when a sentence finishes exactly like audio
 - `frontend/src/i18n.ts` — The voice page's own words in the active language
 - `scripts/setup.sh`, `scripts/start.sh`, `scripts/doctor.py` — One-command
-  install, start (server + Vite + Chrome), and the preflight report
+  install, start (server + Vite + Chrome), and the install + preflight report.
+  `doctor.py` re-runs itself under `.venv/bin/python` whatever Python started
+  it, and `preflight`/`tts` import on the standard library alone (httpx is
+  imported inside `tts.synthesize_chunk`) so it can always say what is missing
 - `frontend/src/orb.ts` — Three.js particle orb visualization
 - `frontend/src/voice.ts` — Web Speech API + audio playback
 - `frontend/src/main.ts` — Frontend state machine

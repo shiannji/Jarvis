@@ -170,7 +170,8 @@ stuck is the CLI's own words, not a guess. Fictional sample data.*
 On a Mac, the short way is two scripts: `./scripts/setup.sh` checks the
 tools, installs everything, makes the certificates and writes `.env`;
 `./scripts/start.sh` starts the server and Vite together and opens Chrome
-(Ctrl+C stops both). `.venv/bin/python scripts/doctor.py` re-runs the
+(Ctrl+C stops both). `python3 scripts/doctor.py` — with any Python; it hands
+itself over to `.venv` — reports what is installed and re-runs the
 server's own first-run checks at any time. The long way:
 
 ```bash

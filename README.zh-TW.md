@@ -203,6 +203,15 @@ git reset --hard '@{u}'
 如果出現 `not a git repository`，代表這份是下載 ZIP 解壓縮的，請改用上面「安裝」第 3 步的
 `git clone` 重新下載一份。
 
+**怎麼確認都裝好了？**
+執行 `python3 scripts/doctor.py`。它會列出安裝狀態（專案的 Python 環境、套件、前端、憑證、
+`.env`）和這台電腦的檢查結果，缺什麼就告訴你怎麼補。不管你的 `python3` 是 Homebrew、
+mise 還是 Mac 內建的，它都會自動改用專案自己的 `.venv` 來跑。
+
+**執行 doctor.py 出現 `No module named 'httpx'`**
+這是舊版 doctor.py 的問題（它沒有改用專案的 `.venv`），已經修正。照上面「怎麼更新」更新後
+再執行一次就好；它會告訴你哪些東西還沒裝好。
+
 **安裝時出現 `line 66: PY?: unbound variable`**
 這是舊版安裝程式的錯誤（Mac 內建的舊版 bash 會把緊接在變數後面的中文字誤當成變數名稱），
 已經修正了。看到這個訊息代表你電腦上還是舊檔案：照上一題更新，再執行一次
@@ -217,7 +226,7 @@ git reset --hard '@{u}'
 
 **他說「語言系統停擺了」**
 通常是 Claude Code 的登入過期了。在終端機執行 `claude` 重新登入，再重新啟動 JARVIS。
-詳細原因在 `data/server.log`。也可以跑 `.venv/bin/python scripts/doctor.py` 做檢查。
+詳細原因在 `data/server.log`。也可以跑 `python3 scripts/doctor.py` 做檢查。
 
 **沒有聲音**
 先在畫面上點一下（Chrome 規定）；再到設定頁按「試聽」；也確認系統音量沒有關。

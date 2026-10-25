@@ -247,3 +247,4 @@ bold "完成！啟動 JARVIS："
 echo "    ./scripts/start.sh"
 echo
 echo "  然後在 Google Chrome 打開 http://localhost:5173 ，點一下畫面，就可以開口說話了。"
+echo "  之後想檢查環境，隨時可以執行：python3 scripts/doctor.py"

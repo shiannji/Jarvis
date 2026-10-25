@@ -20,9 +20,15 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import httpx
+# httpx is imported inside `synthesize_chunk`, the one function that needs
+# it. `preflight` and `scripts/doctor.py` import this module for the
+# voice-mode helpers below, and those must run on nothing but the standard
+# library: run with a Python outside the project's .venv, a top-level import
+# here failed with "No module named 'httpx'" before doctor could say a word.
+if TYPE_CHECKING:
+    import httpx
 
 log = logging.getLogger("jarvis.tts")
 
@@ -80,6 +86,8 @@ class SynthResult:
 async def synthesize_chunk(text: str, *, api_key: str, voice_id: str,
                            client: Optional[httpx.AsyncClient] = None,
                            latency: str = "balanced", timeout: float = 15.0) -> Optional[SynthResult]:
+    import httpx
+
     text = (text or "").strip()
     if not text or not api_key:
         return None
