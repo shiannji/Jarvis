@@ -39,8 +39,40 @@ version_ge() {  # version_ge 2.1.230 2.1.224 → true（數字逐段比，不是
   "$PY" -c 'import sys; v = lambda s: [int(x) for x in s.split(".")]; sys.exit(0 if v(sys.argv[1]) >= v(sys.argv[2]) else 1)' "$1" "$2"
 }
 
-bold "J.A.R.V.I.S. 安裝程式"
+# Which copy is running. "It still fails" and "it is still the old file"
+# look identical from the outside — they did once, for a whole round trip —
+# and a version on the first line tells them apart at a glance.
+HAVE_GIT=0
+if [[ -d .git ]] && command -v git >/dev/null 2>&1; then
+  HAVE_GIT=1   # checked first: on a Mac without the developer tools, a bare `git` pops up an installer
+fi
+VERSION="不明（不是用 git 下載的副本）"
+if [[ $HAVE_GIT -eq 1 ]]; then
+  VERSION="$(git log -1 --format='%h，%cd' --date=short 2>/dev/null || echo 不明)"
+fi
+bold "J.A.R.V.I.S. 安裝程式（版本 ${VERSION}）"
 echo
+
+# A newer version on GitHub means a fix this copy does not have yet. Offer it
+# before anything else runs: a quiet fetch, never a password prompt, and
+# never on a copy with local changes, where a pull could not fast-forward.
+if [[ $HAVE_GIT -eq 1 ]] &&
+   GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
+     fetch --quiet 2>/dev/null; then
+  BEHIND="$(git rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
+  if [[ "${BEHIND}" =~ ^[0-9]+$ && "${BEHIND}" -gt 0 ]]; then
+    warn "GitHub 上有 ${BEHIND} 個更新還沒下載到這台電腦。"
+    if [[ "$(ask '要先更新到最新版本嗎？[Y/n]' Y)" =~ ^[Yy] ]]; then
+      if git pull --ff-only --quiet; then
+        ok "已更新到 $(git log -1 --format='%h' 2>/dev/null)，重新啟動安裝程式…"
+        echo
+        # The running bash still holds the old file open; exec the new one.
+        exec ./scripts/setup.sh "$@"
+      fi
+      warn "沒辦法自動更新（可能這份副本有改過的檔案）。請執行 git pull 看看原因。"
+    fi
+  fi
+fi
 
 # ── 0. macOS ────────────────────────────────────────────────────────────────
 if [[ "$(uname)" != "Darwin" ]]; then
