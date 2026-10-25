@@ -188,6 +188,26 @@ JARVIS，讓它說中文時音色相同但口音會比較「外國人」；喜�
 
 ## 常見問題
 
+**怎麼更新到最新版？**
+在 `jarvis` 資料夾執行 `git pull`。安裝程式第一行會顯示它的版本（例如「版本 53ab289」），
+之後 GitHub 上有新版時，`./scripts/setup.sh` 也會先問你要不要更新。
+
+如果 `git pull` 說有檔案會被覆蓋（`would be overwritten`），而你沒有刻意改過任何檔案，
+可以放棄本機的修改、直接對齊 GitHub 上的版本（`.env`、`.venv` 這些個人檔案不受影響）：
+
+```bash
+git fetch origin
+git reset --hard '@{u}'
+```
+
+如果出現 `not a git repository`，代表這份是下載 ZIP 解壓縮的，請改用上面「安裝」第 3 步的
+`git clone` 重新下載一份。
+
+**安裝時出現 `line 66: PY?: unbound variable`**
+這是舊版安裝程式的錯誤（Mac 內建的舊版 bash 會把緊接在變數後面的中文字誤當成變數名稱），
+已經修正了。看到這個訊息代表你電腦上還是舊檔案：照上一題更新，再執行一次
+`./scripts/setup.sh` 就好。
+
 **麥克風沒反應**
 1. 確認用的是 **Google Chrome**。
 2. 確認網址是 **http://localhost:5173**——Chrome 的麥克風權限連「連接埠」一起記，
